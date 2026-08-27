@@ -58,9 +58,14 @@ golangci-lint run   # not installed in every dev environment; CI always runs it
 ```
 
 The module targets the Go version pinned in `go.mod`. `internal/headless` and the GDScript in
-`scripts/godot_operations.gd` require a real `godot` binary on `PATH` (or `-godot-bin`) to exercise
-end-to-end; unit tests around it stub the Godot invocation and only assert on
-`internal/validate`-level path rejection, since that's the part reachable without Godot installed.
+`scripts/godot_operations.gd` have both pure unit tests (no Godot needed — path validation,
+`parseResponse`'s stdout parsing) and real end-to-end integration tests
+(`internal/headless/integration_test.go`) that run a real Godot binary against the fixture project
+in `internal/headless/testdata/fixture_project/`. The integration tests skip themselves (`go test
+./...` still passes) unless a Godot binary is available via `GODOT_BIN` or `PATH` — set one of
+those locally to run them. CI installs a pinned, checksum-verified Godot and always runs them; see
+`ci.yml`'s `GODOT_VERSION`/`GODOT_SHA512`, bumped together from the release's own
+`SHA512-SUMS.txt`.
 
 ## CI / releases
 

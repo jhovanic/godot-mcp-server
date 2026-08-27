@@ -1,0 +1,10 @@
+; Minimal fixture project for internal/headless's integration tests.
+; Not a real game — just enough for `godot --headless --path .` to open it
+; and load main.tscn.
+
+config_version=5
+
+[application]
+
+config/name="godot-mcp-server headless fixture"
+config/features=PackedStringArray("4.3")

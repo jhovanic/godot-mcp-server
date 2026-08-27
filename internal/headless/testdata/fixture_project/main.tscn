@@ -1,0 +1,7 @@
+[gd_scene format=3]
+
+[node name="Main" type="Node"]
+
+[node name="World" type="Node2D" parent="."]
+
+[node name="Player" type="CharacterBody2D" parent="World"]

@@ -12,6 +12,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Pinned, checksum-verified Godot build used to run internal/headless's
+  # real-engine integration tests. Bump both together from
+  # https://github.com/godotengine/godot/releases/tag/<version>/SHA512-SUMS.txt
+  GODOT_VERSION: 4.7.2-stable
+  GODOT_SHA512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
+
 jobs:
   build-and-test:
     name: Build & test
@@ -27,6 +34,34 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Cache Godot
+        id: cache-godot
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /opt/godot
+          key: godot-${{ runner.os }}-${{ env.GODOT_VERSION }}
+
+      # Downloads the plain editor binary (not the mono/.NET build): it
+      # already supports `--headless`, which is all internal/headless and
+      # scripts/godot_operations.gd use — no export templates, no mono
+      # runtime needed. Verified against the release's own SHA512-SUMS.txt
+      # before it's ever executed.
+      - name: Install Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip"
+          echo "${GODOT_SHA512}  godot.zip" | sha512sum -c -
+          mkdir -p /opt/godot
+          unzip -q godot.zip -d /opt/godot
+          mv "/opt/godot/Godot_v${GODOT_VERSION}_linux.x86_64" /opt/godot/godot
+          chmod +x /opt/godot/godot
+
+      - name: Add Godot to PATH
+        run: |
+          echo "/opt/godot" >> "$GITHUB_PATH"
+          echo "GODOT_BIN=/opt/godot/godot" >> "$GITHUB_ENV"
 
       - name: Build
         run: go build ./...
