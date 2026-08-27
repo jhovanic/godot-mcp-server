@@ -86,6 +86,18 @@ func (f *fakeImportSettingsReader) ReadImportSettings(_ context.Context, params 
 	return f.settings, f.err
 }
 
+// fakeNodePropertySetter is a test double for tools.NodePropertySetter.
+type fakeNodePropertySetter struct {
+	gotParams headless.SetNodePropertyParams
+	result    *headless.SetNodePropertyResult
+	err       error
+}
+
+func (f *fakeNodePropertySetter) SetNodeProperty(_ context.Context, params headless.SetNodePropertyParams) (*headless.SetNodePropertyResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -652,41 +664,186 @@ func TestReadImportSettings_Error(t *testing.T) {
 	}
 }
 
-func TestRegisterAll_NoWriteTools(t *testing.T) {
-	// This is a read-only tool set: assert no write-capable tool has
-	// slipped into the allowlist. Update this list deliberately when a
-	// write tool is intentionally added.
-	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
-	tools.RegisterAll(server, tools.Deps{
+var readToolNames = map[string]bool{
+	"read_scene_tree":       true,
+	"read_script":           true,
+	"read_project_settings": true,
+	"read_text_resource":    true,
+	"read_binary_resource":  true,
+	"read_import_settings":  true,
+}
+
+func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
+	return tools.Deps{
 		SceneTree:       &fakeReader{},
 		Script:          &fakeScriptReader{},
 		ProjectSettings: &fakeProjectSettingsReader{},
 		TextResource:    &fakeTextResourceReader{},
 		BinaryResource:  &fakeBinaryResourceReader{},
 		ImportSettings:  &fakeImportSettingsReader{},
-		Logger:          audit.New(&bytes.Buffer{}),
-	})
+		NodeProperty:    &fakeNodePropertySetter{},
+		Mode:            mode,
+		Logger:          logger,
+	}
+}
+
+// TestRegisterAll_ModeGatesWriteTools asserts the write tool set advertised
+// to the MCP client tracks deps.Mode exactly: only the read tools in
+// ModeReadOnly (including the zero value of Mode, so an unset Mode fails
+// safe rather than fails open), plus set_node_property in ModeReadWrite.
+// Update the write-tool list deliberately when the next write tool is
+// intentionally added.
+func TestRegisterAll_ModeGatesWriteTools(t *testing.T) {
+	cases := []struct {
+		name string
+		mode tools.Mode
+		want map[string]bool
+	}{
+		{name: "zero value", mode: "", want: readToolNames},
+		{name: "read-only", mode: tools.ModeReadOnly, want: readToolNames},
+		{name: "read-write", mode: tools.ModeReadWrite, want: union(readToolNames, map[string]bool{"set_node_property": true})},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+			tools.RegisterAll(server, fullDeps(audit.New(&bytes.Buffer{}), tc.mode))
+
+			cs := connect(t, server)
+			list, err := cs.ListTools(context.Background(), nil)
+			if err != nil {
+				t.Fatalf("ListTools: %v", err)
+			}
+
+			if len(list.Tools) != len(tc.want) {
+				t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(tc.want), list.Tools)
+			}
+			for _, tl := range list.Tools {
+				if !tc.want[tl.Name] {
+					t.Errorf("unexpected tool registered: %q", tl.Name)
+				}
+			}
+		})
+	}
+}
+
+func union(a, b map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+func TestSetNodeProperty_Success(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Label",
+			PropertyName:  "text",
+			PreviousValue: "old text",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
 
 	cs := connect(t, server)
-	list, err := cs.ListTools(context.Background(), nil)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Label",
+			"property_name": "text",
+			"string_value":  "hello",
+		},
+	})
 	if err != nil {
-		t.Fatalf("ListTools: %v", err)
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.ScenePath != "main.tscn" || setter.gotParams.NodePath != "Label" || setter.gotParams.PropertyName != "text" {
+		t.Fatalf("handler did not pass through params, got %+v", setter.gotParams)
+	}
+	if setter.gotParams.StringValue == nil || *setter.gotParams.StringValue != "hello" {
+		t.Fatalf("handler did not pass through string_value, got %+v", setter.gotParams.StringValue)
 	}
 
-	want := map[string]bool{
-		"read_scene_tree":       true,
-		"read_script":           true,
-		"read_project_settings": true,
-		"read_text_resource":    true,
-		"read_binary_resource":  true,
-		"read_import_settings":  true,
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
 	}
-	if len(list.Tools) != len(want) {
-		t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(want), list.Tools)
+	var gotResult headless.SetNodePropertyResult
+	if err := json.Unmarshal([]byte(text.Text), &gotResult); err != nil {
+		t.Fatalf("result content is not valid JSON: %v (%s)", err, text.Text)
 	}
-	for _, tl := range list.Tools {
-		if !want[tl.Name] {
-			t.Errorf("unexpected tool registered: %q", tl.Name)
-		}
+	if gotResult.PropertyName != "text" {
+		t.Fatalf("unexpected result: %+v", gotResult)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "set_node_property" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "set_node_property")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+	if entry.Tier != "headless" {
+		t.Errorf("audit entry tier = %q, want %q", entry.Tier, "headless")
+	}
+}
+
+func TestSetNodeProperty_Error(t *testing.T) {
+	wantErr := errors.New("boom: no node at Label")
+	setter := &fakeNodePropertySetter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Label",
+			"property_name": "text",
+			"string_value":  "hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
 	}
 }

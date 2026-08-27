@@ -239,6 +239,217 @@ func writeMinimalPNG(t *testing.T, path string) {
 	}
 }
 
+// writeSetNodePropertyFixtureScene writes a small, throwaway .tscn to
+// projectDir — deliberately not testdata/fixture_project/main.tscn, since
+// that fixture is shared with the read-only scene-tree tests and must stay
+// pristine (SetNodeProperty writes the scene file it's given). "Main" (a
+// Node2D, which carries a real float property in rotation, a real int
+// property in z_index, and a real bool property in visible) has one child,
+// "Label" (a Label, which carries a real String property in text) — between
+// them, every primitive value type SetNodeProperty supports has a genuine
+// target property to exercise.
+func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
+	t.Helper()
+	const scene = `[gd_scene load_steps=1 format=3]
+
+[node name="Main" type="Node2D"]
+
+[node name="Label" type="Label" parent="."]
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tscn"), []byte(scene), 0o644); err != nil {
+		t.Fatalf("writing fixture scene: %v", err)
+	}
+}
+
+func setNodePropertyFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	writeSetNodePropertyFixtureScene(t, projectDir)
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestSetNodeProperty_RealGodot_String(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	strVal := "hello from a test"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Label",
+		PropertyName: "text",
+		StringValue:  &strVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	// .tscn is plain text: read the saved scene back directly (not via
+	// ReadSceneTree, which doesn't expose properties) to confirm the write
+	// actually landed on disk in Godot's own serialization.
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `text = "hello from a test"`) {
+		t.Errorf("saved scene missing expected text property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Int(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	intVal := int64(7)
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "z_index",
+		IntValue:     &intVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "z_index = 7") {
+		t.Errorf("saved scene missing expected z_index property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Float(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	floatVal := 1.5
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "rotation",
+		FloatValue:   &floatVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "rotation = 1.5") {
+		t.Errorf("saved scene missing expected rotation property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Bool(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	boolVal := false
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "visible",
+		BoolValue:    &boolVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "visible = false") {
+		t.Errorf("saved scene missing expected visible property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	strVal := "should not be written"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "this_property_does_not_exist",
+		StringValue:  &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on an unknown property name, want error")
+	}
+
+	// The scene must be left untouched: a mistyped property name is a
+	// no-op in Godot's own Object.set(), not an error, so the operation
+	// must detect that and refuse to save rather than silently writing
+	// nothing useful.
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene: %v", err)
+	}
+	if strings.Contains(string(data), "this_property_does_not_exist") {
+		t.Errorf("scene was modified despite the error: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_MissingNode(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	boolVal := true
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "DoesNotExist",
+		PropertyName: "visible",
+		BoolValue:    &boolVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty against a missing node, want error")
+	}
+}
+
+func TestSetNodeProperty_RealGodot_MissingScene(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	boolVal := true
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "does_not_exist.tscn",
+		PropertyName: "visible",
+		BoolValue:    &boolVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty against a missing scene, want error")
+	}
+}
+
 func TestReadImportSettings_RealGodot(t *testing.T) {
 	godotBin := godotBinForTest(t)
 

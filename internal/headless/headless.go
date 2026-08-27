@@ -375,6 +375,134 @@ func (c *Client) ReadImportSettings(_ context.Context, params ReadImportSettings
 	}, nil
 }
 
+// SetNodePropertyParams are the parameters for the set_node_property
+// operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue
+// must be set — which one determines the GDScript-side type the property is
+// set to (see scripts/godot_operations.gd's _op_set_node_property), since
+// JSON itself doesn't distinguish int from float the way Go and GDScript
+// both do.
+//
+// This is deliberately scoped to primitive values only. Godot node
+// properties also include compound types (Vector2, Color, resource
+// references, ...); supporting those is a separate, larger design (how does
+// an AI client express a Color or a sub-resource reference as tool
+// arguments?) tracked as a future FEATURES.md item, not a variant of this
+// one.
+type SetNodePropertyParams struct {
+	// ScenePath is the .tscn path, relative to the project root. Validated
+	// against Root before use.
+	ScenePath string `json:"scene_path" jsonschema:"path to a .tscn file, relative to the project root"`
+	// NodePath addresses the target node relative to the scene root, using
+	// Godot's own NodePath syntax (e.g. "World/Player"). Empty string means
+	// the scene root itself.
+	NodePath string `json:"node_path" jsonschema:"path to the target node, relative to the scene root, e.g. \"World/Player\"; empty string means the scene root itself"`
+	// PropertyName is the node property to set, e.g. "visible" or "z_index".
+	PropertyName string `json:"property_name" jsonschema:"the node property to set, e.g. \"visible\" or \"z_index\""`
+
+	StringValue *string  `json:"string_value,omitempty" jsonschema:"set property_name to this string value; exactly one of the *_value fields must be set"`
+	IntValue    *int64   `json:"int_value,omitempty" jsonschema:"set property_name to this integer value; exactly one of the *_value fields must be set"`
+	FloatValue  *float64 `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
+	BoolValue   *bool    `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
+}
+
+// SetNodePropertyResult confirms a completed property write.
+type SetNodePropertyResult struct {
+	// Path is the scene's res://-style path.
+	Path string `json:"path"`
+	// NodePath is echoed back from the request for confirmation.
+	NodePath string `json:"node_path"`
+	// PropertyName is echoed back from the request for confirmation.
+	PropertyName string `json:"property_name"`
+	// PreviousValue is Godot's own string representation (str()) of the
+	// property's value immediately before this write, for audit purposes.
+	// It is not a typed round-trippable value — just a human-readable
+	// record of what was overwritten.
+	PreviousValue string `json:"previous_value"`
+}
+
+// SetNodeProperty loads a .tscn file headlessly, sets a single primitive
+// property on one node, and saves the scene back to disk.
+//
+// Unlike the read-only operations in this package, this genuinely needs
+// Godot for more than just decoding: producing a correct .tscn byte stream
+// (headers, load_steps, resource references, format version) is Godot's own
+// serializer's job, done by instantiating the scene, mutating the live node
+// tree, then re-packing and saving it — the same round trip
+// scripts/godot_operations.gd already uses for read_scene_tree, just with a
+// save at the end. Godot's Object.set() silently no-ops on an unknown
+// property name rather than erroring, so the operations script reads the
+// property back after setting it and refuses to save if the value didn't
+// actually change to the requested one — a mistyped property_name is
+// reported as an error here, never written as a no-op.
+//
+// Because the whole scene is re-packed and re-saved (not patched in place),
+// the resulting file is Godot's own current serialization of the entire
+// scene, not a minimal diff against what was there before: unrelated
+// cosmetic details (e.g. an omitted default load_steps=1, or unique_id
+// attributes Godot's own re-pack adds) can change alongside the property
+// that was actually requested. This mirrors what happens if a human opened
+// the scene in the editor and saved it — it's Godot's own round trip, not a
+// bug in this operation — but it does mean a version-control diff after a
+// write can be noisier than just the one property line.
+func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyParams) (*SetNodePropertyResult, error) {
+	absScenePath, err := c.Root.Resolve(params.ScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: %w", err)
+	}
+	if filepath.Ext(absScenePath) != ".tscn" {
+		return nil, fmt.Errorf("headless: set_node_property: not a .tscn file: %s", params.ScenePath)
+	}
+	if params.PropertyName == "" {
+		return nil, errors.New("headless: set_node_property: property_name is required")
+	}
+
+	valuesSet := 0
+	for _, set := range []bool{params.StringValue != nil, params.IntValue != nil, params.FloatValue != nil, params.BoolValue != nil} {
+		if set {
+			valuesSet++
+		}
+	}
+	if valuesSet != 1 {
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value must be set, got %d", valuesSet)
+	}
+
+	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: computing project-relative path: %w", err)
+	}
+	resPath := "res://" + filepath.ToSlash(relScenePath)
+
+	var result struct {
+		PreviousValue string `json:"previous_value"`
+	}
+	if err := c.run(ctx, "set_node_property", struct {
+		Path         string   `json:"path"`
+		NodePath     string   `json:"node_path"`
+		PropertyName string   `json:"property_name"`
+		StringValue  *string  `json:"string_value,omitempty"`
+		IntValue     *int64   `json:"int_value,omitempty"`
+		FloatValue   *float64 `json:"float_value,omitempty"`
+		BoolValue    *bool    `json:"bool_value,omitempty"`
+	}{
+		Path:         resPath,
+		NodePath:     params.NodePath,
+		PropertyName: params.PropertyName,
+		StringValue:  params.StringValue,
+		IntValue:     params.IntValue,
+		FloatValue:   params.FloatValue,
+		BoolValue:    params.BoolValue,
+	}, &result); err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: %w", err)
+	}
+
+	return &SetNodePropertyResult{
+		Path:          resPath,
+		NodePath:      params.NodePath,
+		PropertyName:  params.PropertyName,
+		PreviousValue: result.PreviousValue,
+	}, nil
+}
+
 // run invokes the operations script with a single fixed operation name and
 // a structured params payload, and decodes the structured result.
 //

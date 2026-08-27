@@ -42,6 +42,7 @@ type config struct {
 	godotBin         string
 	operationsScript string
 	auditLogPath     string
+	mode             string
 }
 
 func parseFlags(args []string) (config, error) {
@@ -52,12 +53,16 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.godotBin, "godot-bin", "godot", "path to (or name on PATH of) the Godot executable used for the headless CLI tier")
 	fs.StringVar(&cfg.operationsScript, "operations-script", "", "path to the fixed headless operations script (default: scripts/godot_operations.gd next to this binary)")
 	fs.StringVar(&cfg.auditLogPath, "audit-log", "", "optional additional path to write the audit log to (entries are always written to stderr and to logs/<session>.txt next to this binary)")
+	fs.StringVar(&cfg.mode, "mode", string(tools.ModeReadOnly), fmt.Sprintf("which tools to expose: %q or %q; write tools are never advertised to the MCP client outside %q", tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeReadWrite))
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
 	if cfg.projectRoot == "" {
 		return config{}, errors.New("-project is required")
+	}
+	if cfg.mode != string(tools.ModeReadOnly) && cfg.mode != string(tools.ModeReadWrite) {
+		return config{}, fmt.Errorf("-mode %q: must be %q or %q", cfg.mode, tools.ModeReadOnly, tools.ModeReadWrite)
 	}
 	return cfg, nil
 }
@@ -166,10 +171,12 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		TextResource:    headlessClient,
 		BinaryResource:  headlessClient,
 		ImportSettings:  headlessClient,
+		NodeProperty:    headlessClient,
+		Mode:            tools.Mode(cfg.mode),
 		Logger:          logger,
 	})
 
-	_, _ = fmt.Fprintf(stderr, "godot-mcp-server: project root %s, serving over stdio\n", root.String())
+	_, _ = fmt.Fprintf(stderr, "godot-mcp-server: project root %s, mode %s, serving over stdio\n", root.String(), cfg.mode)
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 

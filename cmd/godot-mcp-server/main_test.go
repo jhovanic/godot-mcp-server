@@ -51,6 +51,26 @@ func TestParseFlags_Defaults(t *testing.T) {
 	if cfg.operationsScript != "" {
 		t.Errorf("operationsScript = %q, want empty (resolved at runtime)", cfg.operationsScript)
 	}
+	if cfg.mode != "read-only" {
+		t.Errorf("mode = %q, want default %q", cfg.mode, "read-only")
+	}
+}
+
+func TestParseFlags_ExplicitReadWriteMode(t *testing.T) {
+	cfg, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-mode", "read-write"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if cfg.mode != "read-write" {
+		t.Errorf("mode = %q, want %q", cfg.mode, "read-write")
+	}
+}
+
+func TestParseFlags_InvalidMode(t *testing.T) {
+	_, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-mode", "read-write-please"})
+	if err == nil {
+		t.Fatal("parseFlags with invalid -mode, want error")
+	}
 }
 
 // There is deliberately no runtime-tier flag yet at all: internal/runtime

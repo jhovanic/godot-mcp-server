@@ -15,8 +15,10 @@ changelog.
 - [x] Per-invocation audit logging (operation, params, result) independent of the MCP client's own
       logs (stderr always; also `logs/<session>.txt` next to the binary by default, so a human
       has a durable file to review — see `SECURITY.md`)
-- [ ] Read vs. write tool separation, with write tools held to a stricter review bar (no write
-      tool exists yet to hold to that bar — nothing to separate from)
+- [x] Read vs. write tool separation, with write tools held to a stricter review bar — mechanism
+      (`-mode read-only`/`-mode read-write`, defaulting to read-only, gating registration in
+      `internal/tools.RegisterAll` so write tools aren't advertised at all outside `read-write`) is
+      in place; no write tool exists yet to actually plug into it
 - [ ] `SECURITY.md` threat model kept current as tools are added
 - [x] GitHub Actions workflows with third-party actions pinned by commit SHA, least-privilege
       `permissions:` blocks
@@ -49,7 +51,12 @@ changelog.
       project's been opened/imported at least once, so this is a direct read like project
       settings — no Godot round trip. Takes the asset's own path (e.g. `icon.png`), not the
       `.import` file's path, and reads the sibling `<path>.import`
-- [ ] Scoped node property edit (structured, not free-form script edit)
+- [x] Scoped node property edit (structured, not free-form script edit) — tool `set_node_property`:
+      primitive values only (string/int/float/bool) for now, richer value types (Vector2, Color,
+      resource references, ...) are a separate future item. Only registered under
+      `-mode read-write`. Note: writes go through Godot's own scene re-pack/save, so the result is
+      Godot's full current serialization of the scene, not a minimal diff (see
+      `internal/headless.Client.SetNodeProperty`'s doc comment)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)
 
@@ -68,8 +75,8 @@ changelog.
 - [ ] Homebrew tap / Scoop bucket (later, once stable)
 
 ### Configuration
-- [ ] Config-driven tool scoping (e.g. read-only mode vs. read/write mode) rather than requiring a
-      fork to change what's exposed
+- [x] Config-driven tool scoping (e.g. read-only mode vs. read/write mode) rather than requiring a
+      fork to change what's exposed — `-mode` flag on `cmd/godot-mcp-server`
 - [ ] Explicit, off-by-default "advanced" tool category for anything that would otherwise widen
       the trust boundary (see `SECURITY.md`)
 

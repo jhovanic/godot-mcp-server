@@ -371,6 +371,101 @@ func TestReadImportSettings_RejectsOutOfRootPath(t *testing.T) {
 	}
 }
 
+// SetNodeProperty validates ScenePath, the scene extension, and the
+// exactly-one-value-set constraint before ever invoking Godot, so these
+// rejection cases are testable without a Godot binary: newDirectReadTestClient's
+// garbage GodotBin would fail loudly if any of them reached exec.Command.
+// The success path genuinely needs Godot — see TestSetNodeProperty_RealGodot*
+// in integration_test.go.
+
+func TestSetNodeProperty_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	strVal := "hello"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "../outside.tscn",
+		PropertyName: "text",
+		StringValue:  &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("SetNodeProperty error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsNonTscnExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a scene"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	boolVal := true
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "notes.txt",
+		PropertyName: "visible",
+		BoolValue:    &boolVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on a non-.tscn file, want error")
+	}
+}
+
+func TestSetNodeProperty_RejectsZeroValuesSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "visible",
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with no value field set, want error")
+	}
+}
+
+func TestSetNodeProperty_RejectsMultipleValuesSet(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	intVal := int64(1)
+	boolVal := true
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "visible",
+		IntValue:     &intVal,
+		BoolValue:    &boolVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with two value fields set, want error")
+	}
+}
+
+func TestSetNodeProperty_RejectsEmptyPropertyName(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	boolVal := true
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath: "main.tscn",
+		BoolValue: &boolVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with empty property_name, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

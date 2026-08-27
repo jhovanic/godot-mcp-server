@@ -56,6 +56,8 @@ func _dispatch(request: Variant) -> Dictionary:
 			return _op_read_scene_tree(params)
 		"read_binary_resource":
 			return _op_read_binary_resource(params)
+		"set_node_property":
+			return _op_set_node_property(params)
 		_:
 			return _err("unknown operation: %s" % operation)
 
@@ -132,6 +134,82 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 		return _err("read_binary_resource: failed to re-serialize %s as text (error code %d)" % [path, err])
 
 	return {"ok": true}
+
+
+## set_node_property: loads a .tscn file (already-validated res:// path),
+## sets exactly one primitive property (string/int/float/bool — the caller
+## sends exactly one of string_value/int_value/float_value/bool_value) on
+## one node addressed by node_path (relative to the scene root; empty string
+## means the root itself), then re-packs and saves the scene.
+##
+## Object.set() silently no-ops on an unknown property name instead of
+## erroring, so this reads the property back after setting it and only
+## saves if the value actually changed to the requested one — a mistyped
+## property_name or a type Godot can't coerce is reported as an error here,
+## never written as a no-op.
+func _op_set_node_property(params: Variant) -> Dictionary:
+	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("node_path") or not params.has("property_name"):
+		return _err("set_node_property: missing \"path\", \"node_path\" or \"property_name\" param")
+
+	var path: String = params["path"]
+	var node_path: String = params["node_path"]
+	var property_name: String = params["property_name"]
+	if not path.begins_with("res://"):
+		return _err("set_node_property: path must be a res:// path")
+
+	var value: Variant = null
+	var values_set := 0
+	if params.get("string_value") != null:
+		value = str(params["string_value"])
+		values_set += 1
+	if params.get("int_value") != null:
+		value = int(params["int_value"])
+		values_set += 1
+	if params.get("float_value") != null:
+		value = float(params["float_value"])
+		values_set += 1
+	if params.get("bool_value") != null:
+		value = bool(params["bool_value"])
+		values_set += 1
+	if values_set != 1:
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value must be set")
+
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return _err("set_node_property: no scene resource at %s" % path)
+
+	var packed: PackedScene = load(path)
+	if packed == null:
+		return _err("set_node_property: failed to load %s" % path)
+
+	var root: Node = packed.instantiate()
+	if root == null:
+		return _err("set_node_property: failed to instantiate %s" % path)
+
+	var target: Node = root
+	if node_path != "":
+		target = root.get_node_or_null(NodePath(node_path))
+	if target == null:
+		root.free()
+		return _err("set_node_property: no node at %s" % node_path)
+
+	var previous: Variant = target.get(property_name)
+	target.set(property_name, value)
+	var actual: Variant = target.get(property_name)
+	if actual != value:
+		root.free()
+		return _err("set_node_property: setting %s on %s did not take effect (got %s, want %s) — likely an unknown property name or a type Godot couldn't coerce" % [property_name, target.get_class(), actual, value])
+
+	var new_packed := PackedScene.new()
+	var pack_err := new_packed.pack(root)
+	root.free()
+	if pack_err != OK:
+		return _err("set_node_property: failed to re-pack scene (error code %d)" % pack_err)
+
+	var save_err := ResourceSaver.save(new_packed, path)
+	if save_err != OK:
+		return _err("set_node_property: failed to save %s (error code %d)" % [path, save_err])
+
+	return {"ok": true, "result": {"previous_value": str(previous)}}
 
 
 func _err(message: String) -> Dictionary:

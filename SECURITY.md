@@ -27,8 +27,12 @@ These are permanent constraints, not v1 limitations:
 - A **fixed, explicit set of parameterized operations** — read scene tree, edit a specific node
   property, read/write a specific script region, etc. New capabilities are added as new
   parameterized operations, not as more general execution primitives.
-- **Read and write tools are distinguished.** Read-only inspection tools carry materially less
-  risk than write/edit tools, and are treated differently in review.
+- **Read and write tools are distinguished, and separately gated.** Read-only inspection tools
+  carry materially less risk than write/edit tools, and are treated differently in review. This is
+  also enforced mechanically: the server defaults to `-mode read-only`, in which write tools are
+  never registered with the MCP client at all — not merely rejected if called. Widening to
+  `-mode read-write` is an explicit, per-run opt-in the operator makes at startup; it is never
+  implicit and there is no way to enable it from inside an MCP session.
 - **Every tool invocation is logged** — the operation, its parameters, and its result — so there's
   an audit trail independent of the AI client's own logs. Every entry always goes to stderr, and
   by default is *also* written to `logs/<session>.txt` next to the running binary, so a human has

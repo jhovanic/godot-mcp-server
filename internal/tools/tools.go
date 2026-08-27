@@ -65,6 +65,32 @@ type ImportSettingsReader interface {
 	ReadImportSettings(ctx context.Context, params headless.ReadImportSettingsParams) (*headless.ImportSettings, error)
 }
 
+// Mode selects which tools RegisterAll exposes. ModeReadOnly (including the
+// zero value, so an unset Mode fails safe rather than fails open) is the
+// default: nothing but the fixed read tools is ever registered unless a
+// caller explicitly opts into ModeReadWrite.
+type Mode string
+
+const (
+	// ModeReadOnly registers only read tools. This is what the zero value
+	// of Mode behaves as, so a Deps built without setting Mode explicitly
+	// is still safe.
+	ModeReadOnly Mode = "read-only"
+	// ModeReadWrite additionally registers write tools. cmd/ is expected to
+	// require an explicit, validated opt-in (e.g. a -mode flag) before ever
+	// constructing a Deps with this value — see main.go's parseFlags.
+	ModeReadWrite Mode = "read-write"
+)
+
+// NodePropertySetter is the narrow interface the set_node_property tool
+// depends on. *headless.Client satisfies it by genuinely invoking Godot
+// (see SetNodeProperty's doc comment) — unlike every read tool's interface
+// above, this is a write tool and is only ever registered under
+// ModeReadWrite.
+type NodePropertySetter interface {
+	SetNodeProperty(ctx context.Context, params headless.SetNodePropertyParams) (*headless.SetNodePropertyResult, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -75,11 +101,20 @@ type Deps struct {
 	TextResource    TextResourceReader
 	BinaryResource  BinaryResourceReader
 	ImportSettings  ImportSettingsReader
+	NodeProperty    NodePropertySetter
+	Mode            Mode
 	Logger          *audit.Logger
 }
 
 // RegisterAll registers every tool this server exposes against server. This
 // is the only function in the codebase that should call mcp.AddTool.
+//
+// Read tools are always registered. Write tools are gated behind
+// deps.Mode == ModeReadWrite: in ModeReadOnly (the default, including the
+// zero value of Mode), a write tool is never advertised to the MCP client
+// at all — not merely rejected if called. An AI client that can't see a
+// write tool can't be prompted or tricked into calling it, which is a
+// stronger boundary than a runtime check inside the tool handler.
 func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadSceneTree(server, deps)
 	registerReadScript(server, deps)
@@ -87,6 +122,10 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadTextResource(server, deps)
 	registerReadBinaryResource(server, deps)
 	registerReadImportSettings(server, deps)
+
+	if deps.Mode == ModeReadWrite {
+		registerSetNodeProperty(server, deps)
+	}
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -218,6 +257,34 @@ func registerReadImportSettings(server *mcp.Server, deps Deps) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
 		}, settings, nil
+	})
+}
+
+func registerSetNodeProperty(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_node_property",
+		Description: "Write. Sets a single primitive property (string, integer, floating-point, " +
+			"or boolean — exactly one of string_value/int_value/float_value/bool_value must be " +
+			"given) on one node in a .tscn scene under the configured project root, then saves " +
+			"the scene. Fails, without modifying the scene, if the scene, node, or property " +
+			"doesn't exist. Only ever available when the server was started with " +
+			"-mode read-write.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetNodePropertyParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.NodeProperty.SetNodeProperty(ctx, args)
+		deps.Logger.LogResult("headless", "set_node_property", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
 	})
 }
 
