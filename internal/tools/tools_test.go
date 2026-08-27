@@ -62,6 +62,18 @@ func (f *fakeTextResourceReader) ReadTextResource(_ context.Context, params head
 	return f.contents, f.err
 }
 
+// fakeBinaryResourceReader is a test double for tools.BinaryResourceReader.
+type fakeBinaryResourceReader struct {
+	gotParams headless.ReadBinaryResourceParams
+	contents  *headless.BinaryResourceContents
+	err       error
+}
+
+func (f *fakeBinaryResourceReader) ReadBinaryResource(_ context.Context, params headless.ReadBinaryResourceParams) (*headless.BinaryResourceContents, error) {
+	f.gotParams = params
+	return f.contents, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -446,6 +458,97 @@ func TestReadTextResource_Error(t *testing.T) {
 	}
 }
 
+func TestReadBinaryResource_Success(t *testing.T) {
+	reader := &fakeBinaryResourceReader{
+		contents: &headless.BinaryResourceContents{
+			Path:   "res://materials/red.res",
+			Source: "[gd_resource type=\"StandardMaterial3D\" format=3]\n",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{BinaryResource: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_binary_resource",
+		Arguments: map[string]any{"resource_path": "materials/red.res"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.ResourcePath != "materials/red.res" {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	var gotContents headless.BinaryResourceContents
+	if err := json.Unmarshal([]byte(text.Text), &gotContents); err != nil {
+		t.Fatalf("result content is not valid JSON: %v (%s)", err, text.Text)
+	}
+	if gotContents.Source != "[gd_resource type=\"StandardMaterial3D\" format=3]\n" {
+		t.Fatalf("unexpected resource contents in result: %+v", gotContents)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "read_binary_resource" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "read_binary_resource")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+	if entry.Tier != "headless" {
+		t.Errorf("audit entry tier = %q, want %q", entry.Tier, "headless")
+	}
+}
+
+func TestReadBinaryResource_Error(t *testing.T) {
+	wantErr := errors.New("boom: failed to load resource")
+	reader := &fakeBinaryResourceReader{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{BinaryResource: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_binary_resource",
+		Arguments: map[string]any{"resource_path": "materials/missing.res"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
 func TestRegisterAll_NoWriteTools(t *testing.T) {
 	// This is a read-only tool set: assert no write-capable tool has
 	// slipped into the allowlist. Update this list deliberately when a
@@ -456,6 +559,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		Script:          &fakeScriptReader{},
 		ProjectSettings: &fakeProjectSettingsReader{},
 		TextResource:    &fakeTextResourceReader{},
+		BinaryResource:  &fakeBinaryResourceReader{},
 		Logger:          audit.New(&bytes.Buffer{}),
 	})
 
@@ -470,6 +574,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		"read_script":           true,
 		"read_project_settings": true,
 		"read_text_resource":    true,
+		"read_binary_resource":  true,
 	}
 	if len(list.Tools) != len(want) {
 		t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(want), list.Tools)

@@ -54,6 +54,8 @@ func _dispatch(request: Variant) -> Dictionary:
 	match operation:
 		"read_scene_tree":
 			return _op_read_scene_tree(params)
+		"read_binary_resource":
+			return _op_read_binary_resource(params)
 		_:
 			return _err("unknown operation: %s" % operation)
 
@@ -98,6 +100,38 @@ func _node_to_dict(node: Node) -> Dictionary:
 	if not children.is_empty():
 		out["children"] = children
 	return out
+
+
+## read_binary_resource: loads a .res binary resource (already-validated
+## res:// path) and re-serializes it to a .tres text file at out_path — a
+## Go-generated absolute path outside the project root, never something
+## this script chooses or the AI client sees (see
+## internal/headless.Client.ReadBinaryResource, which reads that file back
+## and deletes it). Read-only with respect to the project: does not modify
+## the .res file or anything else inside it. There is no in-memory
+## "serialize this Resource to a string" API in GDScript, only the
+## file-based ResourceSaver.save() used here.
+func _op_read_binary_resource(params: Variant) -> Dictionary:
+	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("out_path"):
+		return _err("read_binary_resource: missing \"path\" or \"out_path\" param")
+
+	var path: String = params["path"]
+	var out_path: String = params["out_path"]
+	if not path.begins_with("res://"):
+		return _err("read_binary_resource: path must be a res:// path")
+
+	if not ResourceLoader.exists(path):
+		return _err("read_binary_resource: no resource at %s" % path)
+
+	var resource: Resource = load(path)
+	if resource == null:
+		return _err("read_binary_resource: failed to load %s" % path)
+
+	var err := ResourceSaver.save(resource, out_path)
+	if err != OK:
+		return _err("read_binary_resource: failed to re-serialize %s as text (error code %d)" % [path, err])
+
+	return {"ok": true}
 
 
 func _err(message: String) -> Dictionary:

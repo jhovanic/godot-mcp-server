@@ -51,6 +51,13 @@ type TextResourceReader interface {
 	ReadTextResource(ctx context.Context, params headless.ReadTextResourceParams) (*headless.TextResourceContents, error)
 }
 
+// BinaryResourceReader is the narrow interface the read_binary_resource
+// tool depends on. Unlike TextResourceReader, *headless.Client genuinely
+// invokes Godot to satisfy this (see ReadBinaryResource's doc comment).
+type BinaryResourceReader interface {
+	ReadBinaryResource(ctx context.Context, params headless.ReadBinaryResourceParams) (*headless.BinaryResourceContents, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -59,6 +66,7 @@ type Deps struct {
 	Script          ScriptReader
 	ProjectSettings ProjectSettingsReader
 	TextResource    TextResourceReader
+	BinaryResource  BinaryResourceReader
 	Logger          *audit.Logger
 }
 
@@ -69,6 +77,7 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadScript(server, deps)
 	registerReadProjectSettings(server, deps)
 	registerReadTextResource(server, deps)
+	registerReadBinaryResource(server, deps)
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -160,6 +169,32 @@ func registerReadTextResource(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		contents, err := deps.TextResource.ReadTextResource(ctx, args)
 		deps.Logger.LogResult("headless", "read_text_resource", args, contents, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(contents, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, contents, nil
+	})
+}
+
+func registerReadBinaryResource(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_binary_resource",
+		Description: "Read-only. Decodes a .res binary resource file under the configured " +
+			"project root by loading it in Godot and re-serializing it through Godot's own " +
+			".tres text format, then returns that text. Does not modify the .res file or any " +
+			"other project state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadBinaryResourceParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		contents, err := deps.BinaryResource.ReadBinaryResource(ctx, args)
+		deps.Logger.LogResult("headless", "read_binary_resource", args, contents, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

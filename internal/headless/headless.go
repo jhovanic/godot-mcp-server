@@ -243,6 +243,89 @@ func (c *Client) ReadTextResource(_ context.Context, params ReadTextResourcePara
 	}, nil
 }
 
+// ReadBinaryResourceParams are the parameters for the read_binary_resource
+// operation.
+type ReadBinaryResourceParams struct {
+	// ResourcePath is the .res path, relative to the project root, e.g.
+	// "materials/red.res". It is validated against Root before use.
+	ResourcePath string `json:"resource_path" jsonschema:"path to a .res binary resource file, relative to the project root"`
+}
+
+// BinaryResourceContents is a binary resource's contents, decoded via Godot
+// into its own .tres text serialization.
+type BinaryResourceContents struct {
+	// Path is the resource's original res://-style path (the .res file
+	// that was read) — not the path of the temporary .tres it was decoded
+	// through, which never outlives this call.
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// ReadBinaryResource decodes a .res binary resource file by loading it in
+// Godot and re-serializing it through Godot's own .tres text format, then
+// returning that text.
+//
+// Unlike ReadTextResource, this genuinely needs Godot: .res is
+// binary-packed, and there is no way to interpret its bytes meaningfully
+// without the engine's own resource loader — the same reason ReadSceneTree
+// needs Godot to instantiate a .tscn's node graph.
+//
+// GDScript has no in-memory "serialize this Resource to a string" API,
+// only the file-based ResourceSaver.save(), so this necessarily writes a
+// temporary .tres file — but always at a Go-generated path in the OS temp
+// directory, outside the configured project root, removed before this
+// function returns. The AI client never sees or influences that path; it
+// only ever sees the res:// path of the .res file it asked to read, and
+// the decoded text back. This is a read-only operation with respect to the
+// project: it does not modify the .res file, or anything else inside the
+// configured project root.
+func (c *Client) ReadBinaryResource(ctx context.Context, params ReadBinaryResourceParams) (*BinaryResourceContents, error) {
+	absPath, err := c.Root.Resolve(params.ResourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_binary_resource: %w", err)
+	}
+
+	switch filepath.Ext(absPath) {
+	case ".res":
+		// supported
+	case ".tres":
+		return nil, fmt.Errorf("headless: read_binary_resource: %s is a .tres text resource, not a binary .res resource — use read_text_resource instead", params.ResourcePath)
+	default:
+		return nil, fmt.Errorf("headless: read_binary_resource: not a .res file: %s", params.ResourcePath)
+	}
+
+	relPath, err := filepath.Rel(c.Root.String(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_binary_resource: computing project-relative path: %w", err)
+	}
+	resPath := "res://" + filepath.ToSlash(relPath)
+
+	tmp, err := os.CreateTemp("", "godot-mcp-server-decoded-*.tres")
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_binary_resource: creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := c.run(ctx, "read_binary_resource", struct {
+		Path    string `json:"path"`
+		OutPath string `json:"out_path"`
+	}{Path: resPath, OutPath: tmpPath}, nil); err != nil {
+		return nil, fmt.Errorf("headless: read_binary_resource: %w", err)
+	}
+
+	decoded, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_binary_resource: reading decoded output: %w", err)
+	}
+
+	return &BinaryResourceContents{
+		Path:   resPath,
+		Source: string(decoded),
+	}, nil
+}
+
 // run invokes the operations script with a single fixed operation name and
 // a structured params payload, and decodes the structured result.
 //

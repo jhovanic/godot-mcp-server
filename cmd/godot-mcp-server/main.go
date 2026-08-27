@@ -164,6 +164,7 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		Script:          headlessClient,
 		ProjectSettings: headlessClient,
 		TextResource:    headlessClient,
+		BinaryResource:  headlessClient,
 		Logger:          logger,
 	})
 

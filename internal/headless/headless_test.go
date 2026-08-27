@@ -284,3 +284,49 @@ func TestReadTextResource_MissingFile(t *testing.T) {
 		t.Fatal("ReadTextResource on a missing file, want error")
 	}
 }
+
+// Unlike ReadScript/ReadProjectSettings/ReadTextResource, ReadBinaryResource
+// does invoke Godot for a valid .res path — but path and extension
+// rejection both happen before that, so these specific cases are still
+// testable without a Godot binary: newDirectReadTestClient's garbage
+// GodotBin would fail loudly if these ever reached exec.Command.
+
+func TestReadBinaryResource_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReadBinaryResource(context.Background(), ReadBinaryResourceParams{ResourcePath: "../outside.res"})
+	if err == nil {
+		t.Fatal("ReadBinaryResource with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("ReadBinaryResource error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestReadBinaryResource_RejectsTextResource(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "red.tres"), []byte("[gd_resource type=\"StandardMaterial3D\" format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReadBinaryResource(context.Background(), ReadBinaryResourceParams{ResourcePath: "red.tres"})
+	if err == nil {
+		t.Fatal("ReadBinaryResource on a .tres file, want error")
+	}
+}
+
+func TestReadBinaryResource_RejectsOtherExtensions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "icon.png"), []byte("not a resource"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReadBinaryResource(context.Background(), ReadBinaryResourceParams{ResourcePath: "icon.png"})
+	if err == nil {
+		t.Fatal("ReadBinaryResource on a non-.res file, want error")
+	}
+}
