@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -50,7 +51,7 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.projectRoot, "project", "", "path to the Godot project root (required); every file operation is scoped to this directory")
 	fs.StringVar(&cfg.godotBin, "godot-bin", "godot", "path to (or name on PATH of) the Godot executable used for the headless CLI tier")
 	fs.StringVar(&cfg.operationsScript, "operations-script", "", "path to the fixed headless operations script (default: scripts/godot_operations.gd next to this binary)")
-	fs.StringVar(&cfg.auditLogPath, "audit-log", "", "optional path to also write the audit log to (audit entries are always written to stderr)")
+	fs.StringVar(&cfg.auditLogPath, "audit-log", "", "optional additional path to write the audit log to (entries are always written to stderr and to logs/<session>.txt next to this binary)")
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -69,17 +70,71 @@ func defaultOperationsScriptPath() (string, error) {
 	return filepath.Join(filepath.Dir(exe), "scripts", "godot_operations.gd"), nil
 }
 
+// sessionID returns a filesystem-safe, human-sortable identifier for one
+// run of this process: a UTC timestamp plus the PID (in case two runs
+// start within the same second). Used to name this session's own audit log
+// file so a human can find it later without any configuration.
+func sessionID(now time.Time, pid int) string {
+	return fmt.Sprintf("%s-%d", now.UTC().Format("20060102T150405Z"), pid)
+}
+
+// logFilePath returns where a session's audit log file should live:
+// logs/<sessionID>.txt inside binDir. binDir is the directory containing
+// the running binary in production (see openDefaultLogFile); taking it as
+// a parameter here keeps this half of the logic unit-testable without
+// touching the filesystem.
+func logFilePath(binDir, sessionID string) string {
+	return filepath.Join(binDir, "logs", sessionID+".txt")
+}
+
+// openDefaultLogFile opens (creating logs/ next to the binary if needed)
+// this session's own audit log file, so a human has somewhere durable to
+// look later beyond stderr — which is only as durable as whatever this
+// process's MCP client host does with it (SECURITY.md requires audit
+// logging independent of the client's own logs, and stderr alone doesn't
+// give a human a file to come back to).
+//
+// This returns an error rather than being fatal: it's a convenience on top
+// of the always-on stderr audit trail, not a substitute for it, so a
+// filesystem problem here (e.g. a read-only install location) shouldn't
+// stop the server from starting — the caller logs a warning and continues
+// with stderr (and any explicit -audit-log path) alone.
+func openDefaultLogFile(now time.Time, pid int) (f *os.File, path string, err error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, "", fmt.Errorf("locating binary directory: %w", err)
+	}
+	path = logFilePath(filepath.Dir(exe), sessionID(now, pid))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, "", fmt.Errorf("creating log directory: %w", err)
+	}
+	f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, "", fmt.Errorf("opening %q: %w", path, err)
+	}
+	return f, path, nil
+}
+
 func run(ctx context.Context, cfg config, stderr io.Writer) error {
-	logWriter := stderr
+	logWriters := []io.Writer{stderr}
+
+	if f, path, err := openDefaultLogFile(time.Now(), os.Getpid()); err != nil {
+		_, _ = fmt.Fprintf(stderr, "godot-mcp-server: warning: could not open default log file: %v (audit log will only go to stderr and any -audit-log path)\n", err)
+	} else {
+		defer func() { _ = f.Close() }()
+		logWriters = append(logWriters, f)
+		_, _ = fmt.Fprintf(stderr, "godot-mcp-server: audit log also written to %s\n", path)
+	}
+
 	if cfg.auditLogPath != "" {
 		f, err := os.OpenFile(cfg.auditLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return fmt.Errorf("opening audit log %q: %w", cfg.auditLogPath, err)
 		}
 		defer func() { _ = f.Close() }()
-		logWriter = io.MultiWriter(stderr, f)
+		logWriters = append(logWriters, f)
 	}
-	logger := audit.New(logWriter)
+	logger := audit.New(io.MultiWriter(logWriters...))
 
 	root, err := validate.NewRoot(cfg.projectRoot)
 	if err != nil {

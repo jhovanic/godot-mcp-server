@@ -1,6 +1,35 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestSessionID_Format(t *testing.T) {
+	now := time.Date(2026, 8, 27, 3, 4, 5, 0, time.UTC)
+	got := sessionID(now, 12345)
+	want := "20260827T030405Z-12345"
+	if got != want {
+		t.Errorf("sessionID(%v, 12345) = %q, want %q", now, got, want)
+	}
+}
+
+func TestSessionID_DifferentPIDsDiffer(t *testing.T) {
+	now := time.Now()
+	a := sessionID(now, 1)
+	b := sessionID(now, 2)
+	if a == b {
+		t.Errorf("sessionID with different pids produced the same ID %q, want distinct IDs", a)
+	}
+}
+
+func TestLogFilePath(t *testing.T) {
+	got := logFilePath("/opt/godot-mcp-server", "20260827T030405Z-12345")
+	want := "/opt/godot-mcp-server/logs/20260827T030405Z-12345.txt"
+	if got != want {
+		t.Errorf("logFilePath = %q, want %q", got, want)
+	}
+}
 
 func TestParseFlags_RequiresProject(t *testing.T) {
 	if _, err := parseFlags([]string{}); err == nil {

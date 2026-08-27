@@ -30,7 +30,13 @@ These are permanent constraints, not v1 limitations:
 - **Read and write tools are distinguished.** Read-only inspection tools carry materially less
   risk than write/edit tools, and are treated differently in review.
 - **Every tool invocation is logged** — the operation, its parameters, and its result — so there's
-  an audit trail independent of the AI client's own logs.
+  an audit trail independent of the AI client's own logs. Every entry always goes to stderr, and
+  by default is *also* written to `logs/<session>.txt` next to the running binary, so a human has
+  a durable file to review later rather than depending on whatever the MCP client host does with
+  stderr. This is a best-effort convenience layered on top of the stderr guarantee, not a
+  replacement for it: a filesystem problem writing that file (e.g. a read-only install location)
+  logs a warning and the server keeps running on stderr alone, it never fails startup. An
+  additional custom path can be set via `-audit-log`.
 
 ## Threat model summary
 

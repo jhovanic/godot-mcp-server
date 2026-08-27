@@ -13,7 +13,8 @@ changelog.
 - [x] TCP runtime tier only ever dials `127.0.0.1`, never exposed beyond loopback by default (the
       Go side is a client — the autoload script owns the bound socket, see README's architecture)
 - [x] Per-invocation audit logging (operation, params, result) independent of the MCP client's own
-      logs
+      logs (stderr always; also `logs/<session>.txt` next to the binary by default, so a human
+      has a durable file to review — see `SECURITY.md`)
 - [ ] Read vs. write tool separation, with write tools held to a stricter review bar (no write
       tool exists yet to hold to that bar — nothing to separate from)
 - [ ] `SECURITY.md` threat model kept current as tools are added
