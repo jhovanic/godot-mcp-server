@@ -19,9 +19,9 @@ changelog.
 - [ ] `SECURITY.md` threat model kept current as tools are added
 - [x] GitHub Actions workflows with third-party actions pinned by commit SHA, least-privilege
       `permissions:` blocks
-- [ ] Signed release binaries (cosign or goreleaser's built-in signing) + published checksums
-      (checksums are implemented via `goreleaser`'s `checksum` block; signing is still open —
-      needs a maintainer-provisioned signing key/secret)
+- [x] Signed release binaries (cosign or goreleaser's built-in signing) + published checksums
+      (`checksums.txt` via `goreleaser`'s `checksum` block, signed keylessly via cosign/Sigstore
+      OIDC in `release.yml` — no maintainer-held signing key)
 
 ## Features (built on top of the security foundation)
 

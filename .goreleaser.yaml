@@ -41,6 +41,27 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Keyless signing via cosign/Sigstore: the signature is tied to the GitHub
+# Actions workflow's own OIDC identity (see release.yml's id-token: write
+# and the cosign-installer step) — there is no private key for the
+# maintainer to generate, store, or lose. Signing the checksums file is
+# sufficient to cover every archive, since each archive's hash is listed in
+# it. Verify with:
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp 'https://github.com/jhovanic/godot-mcp-server/.*' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+#     checksums.txt
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --bundle=${signature}
+      - ${artifact}
+      - --yes
+    artifacts: checksum
+    output: true
+
 changelog:
   sort: asc
   filters:
@@ -53,7 +74,3 @@ release:
   github:
     owner: jhovanic
     name: godot-mcp-server
-  # Signed release binaries (cosign/goreleaser signing) are tracked as an
-  # open item in FEATURES.md — deliberately not added here since it
-  # requires provisioning a signing key/secret, which is a decision for
-  # the maintainer, not something to wire up silently.
