@@ -268,26 +268,27 @@ func writeMinimalPNG(t *testing.T, path string) {
 // stored "frame" int, see TestSetNodeProperty_RealGodot_Vector2i's doc
 // comment — headroom for a non-trivial value; Sprite2D's own setter rejects
 // any coordinate outside the configured frame grid), and "IntGrid" (a plain
-// Node with the
-// fixture's own vector3i_holder.gd script attached, exporting
-// grid_position) — between them, every value type SetNodeProperty supports
-// has a genuine target property to exercise.
+// Node with the fixture's own custom_props_holder.gd script attached) —
+// between them, every value type SetNodeProperty supports has a genuine
+// target property to exercise.
 //
-// Vector3i is the one type with no built-in Node target at all: no built-in
-// Node class exposes a Vector3i property (verified against a real build via
-// ClassDB introspection — the only Vector3i property anywhere in the engine
-// is a Resource property, PlaceholderTexture3D.size, which this tool can't
-// address either way, since it only ever targets Node properties). Testing
-// it against "IntGrid"'s custom-script property instead is also a more
-// realistic stand-in for how this tool actually gets used: against a
-// project's own custom node scripts, not just built-in engine properties.
+// Vector3i and Plane are the two types with no built-in Node target at all:
+// no built-in Node class exposes either property type (verified against a
+// real build via ClassDB introspection — the only property of either type
+// anywhere in the engine is on a Resource, out of this tool's reach either
+// way, since it only ever targets Node properties). Testing them against
+// custom_props_holder.gd's exported properties (grid_position, a Vector3i;
+// boundary_plane, a Plane) instead is also a more realistic stand-in for how
+// this tool actually gets used: against a project's own custom node
+// scripts, not just built-in engine properties.
 func writeSetNodePropertyFixtureScene(t *testing.T, godotBin, projectDir string) {
 	t.Helper()
 	const script = `extends Node
 
 @export var grid_position: Vector3i = Vector3i.ZERO
+@export var boundary_plane: Plane = Plane(0, 1, 0, 0)
 `
-	if err := os.WriteFile(filepath.Join(projectDir, "vector3i_holder.gd"), []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "custom_props_holder.gd"), []byte(script), 0o644); err != nil {
 		t.Fatalf("writing fixture script: %v", err)
 	}
 
@@ -316,7 +317,7 @@ func _init() -> void:
 
 	var int_grid := Node.new()
 	int_grid.name = "IntGrid"
-	int_grid.set_script(load("res://vector3i_holder.gd"))
+	int_grid.set_script(load("res://custom_props_holder.gd"))
 	main.add_child(int_grid)
 	int_grid.owner = main
 
@@ -639,6 +640,31 @@ func TestSetNodeProperty_RealGodot_Vector3i(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "grid_position = Vector3i(2, 3, 4)") {
 		t.Errorf("saved scene missing expected grid_position property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Plane(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "IntGrid",
+		PropertyName: "boundary_plane",
+		PlaneValue:   &Plane{X: 0, Y: 0, Z: 1, D: 5},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "boundary_plane = Plane(0, 0, 1, 5)") {
+		t.Errorf("saved scene missing expected boundary_plane property: %s", data)
 	}
 }
 

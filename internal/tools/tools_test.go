@@ -1141,6 +1141,47 @@ func TestSetNodeProperty_Rect2iSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_PlaneSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "IntGrid",
+			PropertyName:  "boundary_plane",
+			PreviousValue: "(0, 1, 0, 0)",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "IntGrid",
+			"property_name": "boundary_plane",
+			"plane_value":   map[string]any{"x": 0, "y": 0, "z": 1, "d": 5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.PlaneValue
+	if got == nil || got.X != 0 || got.Y != 0 || got.Z != 1 || got.D != 5 {
+		t.Fatalf("handler did not pass through plane_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

@@ -74,7 +74,9 @@ changelog.
           fixed-arity pattern as the vectors above, new only in what it's used for
     - [x] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision
           bounds
-    - [ ] Plane — a Vector3 normal plus a float distance
+    - [x] Plane — a Vector3 normal plus a float distance. Note: like Vector3i, no built-in Node
+          class exposes a Plane property (the only one in the engine is a Resource property), so
+          its real-Godot test target is a custom script-exported property too
     - [ ] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)
     - [ ] Basis — a 3x3 matrix (9 floats); 3D rotation/scale without translation
     - [ ] Transform2D / Transform3D — the actual stored representation behind a node's own

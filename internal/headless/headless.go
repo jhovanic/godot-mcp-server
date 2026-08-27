@@ -435,6 +435,15 @@ type Quaternion struct {
 	W float64 `json:"w" jsonschema:"the quaternion's w component"`
 }
 
+// Plane is a 3D plane defined by a normal (X, Y, Z) and a distance from the
+// origin (D), matching Godot's own Plane type.
+type Plane struct {
+	X float64 `json:"x" jsonschema:"the plane's normal x component"`
+	Y float64 `json:"y" jsonschema:"the plane's normal y component"`
+	Z float64 `json:"z" jsonschema:"the plane's normal z component"`
+	D float64 `json:"d" jsonschema:"the plane's distance from the origin"`
+}
+
 // Color is an RGBA color, matching Godot's own Color type. Components are
 // typically in [0, 1], the same range Godot's own Color constructor and
 // editor use, though Godot itself doesn't clamp them (values outside that
@@ -449,14 +458,14 @@ type Color struct {
 // SetNodePropertyParams are the parameters for the set_node_property
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
-// QuaternionValue, Rect2Value, Rect2iValue must be set — which one
-// determines the GDScript-side type the property is set to (see
+// QuaternionValue, Rect2Value, Rect2iValue, PlaneValue must be set — which
+// one determines the GDScript-side type the property is set to (see
 // scripts/godot_operations.gd's _op_set_node_property), since JSON itself
 // doesn't distinguish int from float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
-// Vector2i, Vector3i, Quaternion, Rect2, and Rect2i for now. Godot node
-// properties also include other compound types (resource references,
+// Vector2i, Vector3i, Quaternion, Rect2, Rect2i, and Plane for now. Godot
+// node properties also include other compound types (resource references,
 // NodePath, arrays, ...); supporting those is a separate, larger design
 // (how does an AI client express a sub-resource reference as tool
 // arguments?) tracked as a future FEATURES.md item, not a variant of this
@@ -484,6 +493,7 @@ type SetNodePropertyParams struct {
 	QuaternionValue *Quaternion `json:"quaternion_value,omitempty" jsonschema:"set property_name to this Quaternion value (3D rotation, e.g. Node3D.quaternion); exactly one of the *_value fields must be set"`
 	Rect2Value      *Rect2      `json:"rect2_value,omitempty" jsonschema:"set property_name to this Rect2 value (e.g. region_rect); exactly one of the *_value fields must be set"`
 	Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty" jsonschema:"set property_name to this Rect2i value; exactly one of the *_value fields must be set"`
+	PlaneValue      *Plane      `json:"plane_value,omitempty" jsonschema:"set property_name to this Plane value (a normal vector plus a distance, e.g. a custom script's boundary/clip plane); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -551,13 +561,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.QuaternionValue != nil,
 		params.Rect2Value != nil,
 		params.Rect2iValue != nil,
+		params.PlaneValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -585,6 +596,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		QuaternionValue *Quaternion `json:"quaternion_value,omitempty"`
 		Rect2Value      *Rect2      `json:"rect2_value,omitempty"`
 		Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty"`
+		PlaneValue      *Plane      `json:"plane_value,omitempty"`
 	}{
 		Path:            resPath,
 		NodePath:        params.NodePath,
@@ -601,6 +613,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		QuaternionValue: params.QuaternionValue,
 		Rect2Value:      params.Rect2Value,
 		Rect2iValue:     params.Rect2iValue,
+		PlaneValue:      params.PlaneValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}
