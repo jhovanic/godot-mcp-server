@@ -382,19 +382,30 @@ type Vector2 struct {
 	Y float64 `json:"y" jsonschema:"the vector's y component"`
 }
 
+// Color is an RGBA color, matching Godot's own Color type. Components are
+// typically in [0, 1], the same range Godot's own Color constructor and
+// editor use, though Godot itself doesn't clamp them (values outside that
+// range are valid for HDR-style effects).
+type Color struct {
+	R float64 `json:"r" jsonschema:"the color's red component, typically 0-1"`
+	G float64 `json:"g" jsonschema:"the color's green component, typically 0-1"`
+	B float64 `json:"b" jsonschema:"the color's blue component, typically 0-1"`
+	A float64 `json:"a" jsonschema:"the color's alpha (opacity) component, typically 0-1"`
+}
+
 // SetNodePropertyParams are the parameters for the set_node_property
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
-// Vector2Value must be set — which one determines the GDScript-side type the
-// property is set to (see scripts/godot_operations.gd's
-// _op_set_node_property), since JSON itself doesn't distinguish int from
-// float the way Go and GDScript both do.
+// Vector2Value, ColorValue must be set — which one determines the
+// GDScript-side type the property is set to (see
+// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
+// doesn't distinguish int from float the way Go and GDScript both do.
 //
-// This is deliberately scoped to primitives plus Vector2 for now. Godot node
-// properties also include other compound types (Color, resource
-// references, ...); supporting those is a separate, larger design (how does
-// an AI client express a Color or a sub-resource reference as tool
-// arguments?) tracked as a future FEATURES.md item, not a variant of this
-// one.
+// This is deliberately scoped to primitives plus Vector2 and Color for now.
+// Godot node properties also include other compound types (resource
+// references, NodePath, arrays, ...); supporting those is a separate,
+// larger design (how does an AI client express a sub-resource reference as
+// tool arguments?) tracked as a future FEATURES.md item, not a variant of
+// this one.
 type SetNodePropertyParams struct {
 	// ScenePath is the .tscn path, relative to the project root. Validated
 	// against Root before use.
@@ -411,6 +422,7 @@ type SetNodePropertyParams struct {
 	FloatValue   *float64 `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
 	BoolValue    *bool    `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
 	Vector2Value *Vector2 `json:"vector2_value,omitempty" jsonschema:"set property_name to this Vector2 value (e.g. position, scale); exactly one of the *_value fields must be set"`
+	ColorValue   *Color   `json:"color_value,omitempty" jsonschema:"set property_name to this Color value (e.g. modulate, self_modulate); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -465,13 +477,13 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 	}
 
 	valuesSet := 0
-	for _, set := range []bool{params.StringValue != nil, params.IntValue != nil, params.FloatValue != nil, params.BoolValue != nil, params.Vector2Value != nil} {
+	for _, set := range []bool{params.StringValue != nil, params.IntValue != nil, params.FloatValue != nil, params.BoolValue != nil, params.Vector2Value != nil, params.ColorValue != nil} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, color_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -492,6 +504,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		FloatValue   *float64 `json:"float_value,omitempty"`
 		BoolValue    *bool    `json:"bool_value,omitempty"`
 		Vector2Value *Vector2 `json:"vector2_value,omitempty"`
+		ColorValue   *Color   `json:"color_value,omitempty"`
 	}{
 		Path:         resPath,
 		NodePath:     params.NodePath,
@@ -501,6 +514,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		FloatValue:   params.FloatValue,
 		BoolValue:    params.BoolValue,
 		Vector2Value: params.Vector2Value,
+		ColorValue:   params.ColorValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

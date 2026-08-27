@@ -244,9 +244,10 @@ func writeMinimalPNG(t *testing.T, path string) {
 // that fixture is shared with the read-only scene-tree tests and must stay
 // pristine (SetNodeProperty writes the scene file it's given). "Main" (a
 // Node2D, which carries a real float property in rotation, a real int
-// property in z_index, a real bool property in visible, and a real Vector2
-// property in position) has one child, "Label" (a Label, which carries a
-// real String property in text) — between them, every value type
+// property in z_index, a real bool property in visible, a real Vector2
+// property in position, and a real Color property in modulate, inherited
+// from CanvasItem) has one child, "Label" (a Label, which carries a real
+// String property in text) — between them, every value type
 // SetNodeProperty supports has a genuine target property to exercise.
 func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
 	t.Helper()
@@ -407,6 +408,31 @@ func TestSetNodeProperty_RealGodot_Vector2(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "position = Vector2(1.5, -2.5)") {
 		t.Errorf("saved scene missing expected position property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Color(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "modulate",
+		ColorValue:   &Color{R: 0.5, G: 0.25, B: 0.75, A: 1},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "modulate = Color(0.5, 0.25, 0.75, 1)") {
+		t.Errorf("saved scene missing expected modulate property: %s", data)
 	}
 }
 
