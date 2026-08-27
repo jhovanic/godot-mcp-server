@@ -550,6 +550,39 @@ func TestSetNodeProperty_RealGodot_Vector3(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_Quaternion targets Node3D's "quaternion",
+// which — like "position" (see TestSetNodeProperty_RealGodot_Vector3 above)
+// — is a synthetic accessor onto the node's stored "transform", this time
+// converting the quaternion into a rotation Basis rather than an origin.
+// The value used here is a 90-degree rotation around Y
+// (x=0, y=sin(45deg), z=0, w=cos(45deg)); the exact saved Basis values were
+// captured from a real Godot run rather than hand-derived, the same way
+// TestSetNodeProperty_RealGodot_Vector3's Transform3D assertion was.
+func TestSetNodeProperty_RealGodot_Quaternion(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "Cube",
+		PropertyName:    "quaternion",
+		QuaternionValue: &Quaternion{X: 0, Y: 0.7071067811865476, Z: 0, W: 0.7071067811865476},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 0, 0, 0)") {
+		t.Errorf("saved scene missing expected transform with the rotation basis: %s", data)
+	}
+}
+
 // TestSetNodeProperty_RealGodot_Vector2i targets Sprite2D's "frame_coords",
 // which — like Node3D's "position" (see TestSetNodeProperty_RealGodot_Vector3
 // above) — is not itself a stored property: Sprite2D only exports "frame"

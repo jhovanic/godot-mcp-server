@@ -138,11 +138,12 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 
 ## set_node_property: loads a .tscn file (already-validated res:// path),
 ## sets exactly one property (string/int/float/bool/Vector2/Vector3/Color/
-## Vector2i/Vector3i — the caller sends exactly one of string_value/
-## int_value/float_value/bool_value/vector2_value/vector3_value/color_value/
-## vector2i_value/vector3i_value) on one node addressed by node_path
-## (relative to the scene root; empty string means the root itself), then
-## re-packs and saves the scene.
+## Vector2i/Vector3i/Quaternion — the caller sends exactly one of
+## string_value/int_value/float_value/bool_value/vector2_value/
+## vector3_value/color_value/vector2i_value/vector3i_value/
+## quaternion_value) on one node addressed by node_path (relative to the
+## scene root; empty string means the root itself), then re-packs and saves
+## the scene.
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
@@ -193,8 +194,12 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 		var v3i: Dictionary = params["vector3i_value"]
 		value = Vector3i(int(v3i.get("x", 0)), int(v3i.get("y", 0)), int(v3i.get("z", 0)))
 		values_set += 1
+	if params.get("quaternion_value") != null:
+		var q: Dictionary = params["quaternion_value"]
+		value = Quaternion(float(q.get("x", 0.0)), float(q.get("y", 0.0)), float(q.get("z", 0.0)), float(q.get("w", 1.0)))
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)

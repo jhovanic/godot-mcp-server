@@ -70,7 +70,7 @@ changelog.
           out of this tool's reach either way), so its real-Godot test target is a custom
           script-exported property instead, which is arguably the more representative use case
           for this tool regardless
-    - [ ] Quaternion — 4-float rotation representation, alternative to Euler angles; same
+    - [x] Quaternion — 4-float rotation representation, alternative to Euler angles; same
           fixed-arity pattern as the vectors above, new only in what it's used for
     - [ ] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision
           bounds

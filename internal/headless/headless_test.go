@@ -675,6 +675,48 @@ func TestSetNodeProperty_RejectsVector3iPlusOtherValue(t *testing.T) {
 	}
 }
 
+// QuaternionValue participates in the same "exactly one *_value field"
+// count as the other value fields, proven the same way as
+// Vector2AloneIsValid above.
+
+func TestSetNodeProperty_QuaternionAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		PropertyName:    "quaternion",
+		QuaternionValue: &Quaternion{X: 0, Y: 0, Z: 0, W: 1},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone quaternion_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone quaternion_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsQuaternionPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		PropertyName:    "quaternion",
+		QuaternionValue: &Quaternion{X: 0, Y: 0, Z: 0, W: 1},
+		Vector3Value:    &Vector3{X: 1, Y: 2, Z: 3},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with quaternion_value and vector3_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable
