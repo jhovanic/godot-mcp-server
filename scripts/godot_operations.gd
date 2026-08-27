@@ -138,12 +138,13 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 
 ## set_node_property: loads a .tscn file (already-validated res:// path),
 ## sets exactly one property (string/int/float/bool/Vector2/Vector3/Color/
-## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB — the caller sends
-## exactly one of string_value/int_value/float_value/bool_value/
+## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis — the caller
+## sends exactly one of string_value/int_value/float_value/bool_value/
 ## vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/
-## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value) on one
-## node addressed by node_path (relative to the scene root; empty string
-## means the root itself), then re-packs and saves the scene.
+## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/
+## basis_value) on one node addressed by node_path (relative to the scene
+## root; empty string means the root itself), then re-packs and saves the
+## scene.
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
@@ -223,8 +224,19 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 			Vector3(float(box_size.get("x", 0.0)), float(box_size.get("y", 0.0)), float(box_size.get("z", 0.0)))
 		)
 		values_set += 1
+	if params.get("basis_value") != null:
+		var basis_dict: Dictionary = params["basis_value"]
+		var bx: Dictionary = basis_dict.get("x", {})
+		var by: Dictionary = basis_dict.get("y", {})
+		var bz: Dictionary = basis_dict.get("z", {})
+		value = Basis(
+			Vector3(float(bx.get("x", 0.0)), float(bx.get("y", 0.0)), float(bx.get("z", 0.0))),
+			Vector3(float(by.get("x", 0.0)), float(by.get("y", 0.0)), float(by.get("z", 0.0))),
+			Vector3(float(bz.get("x", 0.0)), float(bz.get("y", 0.0)), float(bz.get("z", 0.0)))
+		)
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)

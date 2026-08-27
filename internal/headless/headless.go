@@ -433,6 +433,14 @@ type AABB struct {
 	Size     Vector3 `json:"size" jsonschema:"the box's size (width, height, depth)"`
 }
 
+// Basis is a 3x3 matrix expressed as three axis vectors, matching Godot's
+// own Basis type — 3D rotation/scale without translation.
+type Basis struct {
+	X Vector3 `json:"x" jsonschema:"the basis's x axis (first column)"`
+	Y Vector3 `json:"y" jsonschema:"the basis's y axis (second column)"`
+	Z Vector3 `json:"z" jsonschema:"the basis's z axis (third column)"`
+}
+
 // Quaternion is a four-component rotation representation, matching Godot's
 // own Quaternion type — an alternative to Euler angles for 3D rotation.
 type Quaternion struct {
@@ -465,15 +473,15 @@ type Color struct {
 // SetNodePropertyParams are the parameters for the set_node_property
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
-// QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue must be
-// set — which one determines the GDScript-side type the property is set to
-// (see scripts/godot_operations.gd's _op_set_node_property), since JSON
-// itself doesn't distinguish int from float the way Go and GDScript both
-// do.
+// QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
+// BasisValue must be set — which one determines the GDScript-side type the
+// property is set to (see scripts/godot_operations.gd's
+// _op_set_node_property), since JSON itself doesn't distinguish int from
+// float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
-// Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, and AABB for now.
-// Godot node properties also include other compound types (resource
+// Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, and Basis for
+// now. Godot node properties also include other compound types (resource
 // references, NodePath, arrays, ...); supporting those is a separate,
 // larger design (how does an AI client express a sub-resource reference as
 // tool arguments?) tracked as a future FEATURES.md item, not a variant of
@@ -503,6 +511,7 @@ type SetNodePropertyParams struct {
 	Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty" jsonschema:"set property_name to this Rect2i value; exactly one of the *_value fields must be set"`
 	PlaneValue      *Plane      `json:"plane_value,omitempty" jsonschema:"set property_name to this Plane value (a normal vector plus a distance, e.g. a custom script's boundary/clip plane); exactly one of the *_value fields must be set"`
 	AABBValue       *AABB       `json:"aabb_value,omitempty" jsonschema:"set property_name to this AABB value (a 3D axis-aligned bounding box, e.g. custom_aabb); exactly one of the *_value fields must be set"`
+	BasisValue      *Basis      `json:"basis_value,omitempty" jsonschema:"set property_name to this Basis value (3D rotation/scale without translation, e.g. Node3D.basis); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -572,13 +581,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.Rect2iValue != nil,
 		params.PlaneValue != nil,
 		params.AABBValue != nil,
+		params.BasisValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -608,6 +618,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty"`
 		PlaneValue      *Plane      `json:"plane_value,omitempty"`
 		AABBValue       *AABB       `json:"aabb_value,omitempty"`
+		BasisValue      *Basis      `json:"basis_value,omitempty"`
 	}{
 		Path:            resPath,
 		NodePath:        params.NodePath,
@@ -626,6 +637,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Rect2iValue:     params.Rect2iValue,
 		PlaneValue:      params.PlaneValue,
 		AABBValue:       params.AABBValue,
+		BasisValue:      params.BasisValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

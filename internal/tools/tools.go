@@ -264,13 +264,14 @@ func registerSetNodeProperty(server *mcp.Server, deps Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "set_node_property",
 		Description: "Write. Sets a single property (string, integer, floating-point, boolean, " +
-			"Vector2, Vector3, Color, Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, or " +
-			"AABB — exactly one of string_value/int_value/float_value/bool_value/vector2_value/" +
-			"vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/" +
-			"rect2_value/rect2i_value/plane_value/aabb_value must be given) on one node in a " +
-			".tscn scene under the configured project root, then saves the scene. Fails, without " +
-			"modifying the scene, if the scene, node, or property doesn't exist. Only ever " +
-			"available when the server was started with -mode read-write.",
+			"Vector2, Vector3, Color, Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, " +
+			"AABB, or Basis — exactly one of string_value/int_value/float_value/bool_value/" +
+			"vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/" +
+			"quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value must " +
+			"be given) on one node in a .tscn scene under the configured project root, then " +
+			"saves the scene. Fails, without modifying the scene, if the scene, node, or " +
+			"property doesn't exist. Only ever available when the server was started with " +
+			"-mode read-write.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetNodePropertyParams) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
 		result, err := deps.NodeProperty.SetNodeProperty(ctx, args)

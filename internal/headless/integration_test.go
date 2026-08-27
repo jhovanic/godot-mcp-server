@@ -584,6 +584,40 @@ func TestSetNodeProperty_RealGodot_Quaternion(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_Basis targets Node3D's "basis", which — like
+// "position" and "quaternion" above — is a synthetic accessor onto the
+// node's stored "transform": basis supplies its rotation/scale part while
+// leaving the origin untouched (zero here, since the fixture's "Cube" is
+// otherwise at its default transform).
+func TestSetNodeProperty_RealGodot_Basis(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Cube",
+		PropertyName: "basis",
+		BasisValue: &Basis{
+			X: Vector3{X: 2, Y: 0, Z: 0},
+			Y: Vector3{X: 0, Y: 3, Z: 0},
+			Z: Vector3{X: 0, Y: 0, Z: 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "transform = Transform3D(2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0)") {
+		t.Errorf("saved scene missing expected transform with the requested basis: %s", data)
+	}
+}
+
 // TestSetNodeProperty_RealGodot_Vector2i targets Sprite2D's "frame_coords",
 // which — like Node3D's "position" (see TestSetNodeProperty_RealGodot_Vector3
 // above) — is not itself a stored property: Sprite2D only exports "frame"

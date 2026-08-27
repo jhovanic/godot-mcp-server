@@ -1226,6 +1226,51 @@ func TestSetNodeProperty_AABBSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_BasisSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Cube",
+			PropertyName:  "basis",
+			PreviousValue: "[X: (1, 0, 0), Y: (0, 1, 0), Z: (0, 0, 1)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Cube",
+			"property_name": "basis",
+			"basis_value": map[string]any{
+				"x": map[string]any{"x": 2, "y": 0, "z": 0},
+				"y": map[string]any{"x": 0, "y": 3, "z": 0},
+				"z": map[string]any{"x": 0, "y": 0, "z": 4},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.BasisValue
+	if got == nil || got.X.X != 2 || got.Y.Y != 3 || got.Z.Z != 4 {
+		t.Fatalf("handler did not pass through basis_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}
