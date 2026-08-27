@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,10 @@ type request struct {
 }
 
 // response is the fixed envelope the operations script prints as its sole
-// line of stdout output.
+// line of *its own* stdout output. It is not necessarily the only line in
+// the Godot process's stdout as a whole — the Godot binary itself writes an
+// engine startup banner to stdout before any script code runs (and future
+// versions may add more) — see parseResponse.
 type response struct {
 	OK     bool            `json:"ok"`
 	Error  string          `json:"error,omitempty"`
@@ -118,8 +122,8 @@ func (c *Client) run(ctx context.Context, operation string, params, out any) err
 		return fmt.Errorf("running godot: %w (stderr: %s)", err, stderr.String())
 	}
 
-	var resp response
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &resp); err != nil {
+	resp, err := parseResponse(stdout.Bytes())
+	if err != nil {
 		return fmt.Errorf("decoding godot response: %w (stdout: %s, stderr: %s)", err, stdout.String(), stderr.String())
 	}
 	if !resp.OK {
@@ -131,4 +135,41 @@ func (c *Client) run(ctx context.Context, operation string, params, out any) err
 		}
 	}
 	return nil
+}
+
+// parseResponse extracts and decodes the operations script's response from
+// a Godot process's captured stdout.
+//
+// stdout as a whole is not guaranteed to be a single JSON document: the
+// Godot engine writes its own startup banner (e.g. "Godot Engine
+// v4.7.1.stable... - https://godotengine.org") before any script code runs,
+// and future engine versions may add further startup lines. The operations
+// script's own contract (scripts/godot_operations.gd) is to print exactly
+// one line — the JSON response — immediately before quit(), so the last
+// non-blank line of stdout is always that response, regardless of whatever
+// Godot itself wrote first.
+func parseResponse(stdout []byte) (response, error) {
+	line, err := lastNonEmptyLine(stdout)
+	if err != nil {
+		return response{}, err
+	}
+
+	var resp response
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return response{}, err
+	}
+	return resp, nil
+}
+
+// lastNonEmptyLine returns the last non-blank line of b, trimmed of
+// surrounding whitespace.
+func lastNonEmptyLine(b []byte) ([]byte, error) {
+	lines := bytes.Split(b, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) > 0 {
+			return line, nil
+		}
+	}
+	return nil, errors.New("no output line found")
 }
