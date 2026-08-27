@@ -104,7 +104,12 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server", Version: serverVersion}, nil)
-	tools.RegisterAll(server, tools.Deps{SceneTree: headlessClient, Script: headlessClient, Logger: logger})
+	tools.RegisterAll(server, tools.Deps{
+		SceneTree:       headlessClient,
+		Script:          headlessClient,
+		ProjectSettings: headlessClient,
+		Logger:          logger,
+	})
 
 	_, _ = fmt.Fprintf(stderr, "godot-mcp-server: project root %s, serving over stdio\n", root.String())
 	return server.Run(ctx, &mcp.StdioTransport{})

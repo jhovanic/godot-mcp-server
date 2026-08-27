@@ -32,7 +32,13 @@ changelog.
 - [x] Read script contents (deliberately doesn't invoke Godot — `.gd` files are plain text, so
       this is a validated direct file read, not a `godot --headless` round trip; see
       `internal/headless.Client.ReadScript`'s doc comment)
-- [ ] Read project settings and resources
+- [x] Read project settings (`project.godot`, the one per-project config file — same
+      direct-read pattern as script contents, no Godot round trip, no path param needed)
+- [ ] Read resources (deliberately split out from "project settings and resources": Godot
+      resources come in two real flavors — `.tres` text resources, readable the same way as
+      scripts, and `.res` binary resources, which would need a real Godot round trip to decode —
+      and cover wildly different content depending on resource type. Needs its own scoping
+      decision before implementation, not bundled in here.)
 - [ ] Scoped node property edit (structured, not free-form script edit)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)

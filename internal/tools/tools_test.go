@@ -40,6 +40,16 @@ func (f *fakeScriptReader) ReadScript(_ context.Context, params headless.ReadScr
 	return f.contents, f.err
 }
 
+// fakeProjectSettingsReader is a test double for tools.ProjectSettingsReader.
+type fakeProjectSettingsReader struct {
+	settings *headless.ProjectSettings
+	err      error
+}
+
+func (f *fakeProjectSettingsReader) ReadProjectSettings(_ context.Context, _ headless.ReadProjectSettingsParams) (*headless.ProjectSettings, error) {
+	return f.settings, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -251,15 +261,98 @@ func TestReadScript_Error(t *testing.T) {
 	}
 }
 
+func TestReadProjectSettings_Success(t *testing.T) {
+	reader := &fakeProjectSettingsReader{
+		settings: &headless.ProjectSettings{
+			Path:   "res://project.godot",
+			Source: "config_version=5\n",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{ProjectSettings: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "read_project_settings"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	var gotSettings headless.ProjectSettings
+	if err := json.Unmarshal([]byte(text.Text), &gotSettings); err != nil {
+		t.Fatalf("result content is not valid JSON: %v (%s)", err, text.Text)
+	}
+	if gotSettings.Source != "config_version=5\n" {
+		t.Fatalf("unexpected project settings in result: %+v", gotSettings)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "read_project_settings" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "read_project_settings")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+	if entry.Tier != "headless" {
+		t.Errorf("audit entry tier = %q, want %q", entry.Tier, "headless")
+	}
+}
+
+func TestReadProjectSettings_Error(t *testing.T) {
+	wantErr := errors.New("boom: no project.godot")
+	reader := &fakeProjectSettingsReader{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{ProjectSettings: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "read_project_settings"})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
 func TestRegisterAll_NoWriteTools(t *testing.T) {
 	// This is a read-only tool set: assert no write-capable tool has
 	// slipped into the allowlist. Update this list deliberately when a
 	// write tool is intentionally added.
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
 	tools.RegisterAll(server, tools.Deps{
-		SceneTree: &fakeReader{},
-		Script:    &fakeScriptReader{},
-		Logger:    audit.New(&bytes.Buffer{}),
+		SceneTree:       &fakeReader{},
+		Script:          &fakeScriptReader{},
+		ProjectSettings: &fakeProjectSettingsReader{},
+		Logger:          audit.New(&bytes.Buffer{}),
 	})
 
 	cs := connect(t, server)
@@ -268,7 +361,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	want := map[string]bool{"read_scene_tree": true, "read_script": true}
+	want := map[string]bool{"read_scene_tree": true, "read_script": true, "read_project_settings": true}
 	if len(list.Tools) != len(want) {
 		t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(want), list.Tools)
 	}

@@ -102,12 +102,12 @@ func TestReadSceneTree_RejectsOutOfRootPath(t *testing.T) {
 	}
 }
 
-// ReadScript never invokes Godot at all — GDScript files are plain text, so
-// there's no engine capability this operation needs. GodotBin and
-// OperationsScript are set to garbage below specifically to prove that: if
-// ReadScript ever started shelling out, these tests would fail loudly
-// instead of silently doing the wrong thing.
-func newScriptTestClient(t *testing.T, projectRoot string) *Client {
+// ReadScript and ReadProjectSettings never invoke Godot at all — both read
+// plain text files directly, so there's no engine capability either
+// operation needs. GodotBin and OperationsScript are set to garbage below
+// specifically to prove that: if either ever started shelling out, these
+// tests would fail loudly instead of silently doing the wrong thing.
+func newDirectReadTestClient(t *testing.T, projectRoot string) *Client {
 	t.Helper()
 	root, err := validate.NewRoot(projectRoot)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestReadScript_Success(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	c := newScriptTestClient(t, dir)
+	c := newDirectReadTestClient(t, dir)
 
 	got, err := c.ReadScript(context.Background(), ReadScriptParams{ScriptPath: "scripts/player.gd"})
 	if err != nil {
@@ -145,7 +145,7 @@ func TestReadScript_Success(t *testing.T) {
 }
 
 func TestReadScript_RejectsOutOfRootPath(t *testing.T) {
-	c := newScriptTestClient(t, t.TempDir())
+	c := newDirectReadTestClient(t, t.TempDir())
 
 	_, err := c.ReadScript(context.Background(), ReadScriptParams{ScriptPath: "../outside.gd"})
 	if err == nil {
@@ -162,7 +162,7 @@ func TestReadScript_RejectsNonGDScriptExtension(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	c := newScriptTestClient(t, dir)
+	c := newDirectReadTestClient(t, dir)
 
 	_, err := c.ReadScript(context.Background(), ReadScriptParams{ScriptPath: "notes.txt"})
 	if err == nil {
@@ -171,10 +171,42 @@ func TestReadScript_RejectsNonGDScriptExtension(t *testing.T) {
 }
 
 func TestReadScript_MissingFile(t *testing.T) {
-	c := newScriptTestClient(t, t.TempDir())
+	c := newDirectReadTestClient(t, t.TempDir())
 
 	_, err := c.ReadScript(context.Background(), ReadScriptParams{ScriptPath: "does_not_exist.gd"})
 	if err == nil {
 		t.Fatal("ReadScript on a missing file, want error")
+	}
+}
+
+func TestReadProjectSettings_Success(t *testing.T) {
+	dir := t.TempDir()
+	const source = "config_version=5\n\n[application]\n\nconfig/name=\"Fixture\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "project.godot"), []byte(source), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	got, err := c.ReadProjectSettings(context.Background(), ReadProjectSettingsParams{})
+	if err != nil {
+		t.Fatalf("ReadProjectSettings: %v", err)
+	}
+	if got.Source != source {
+		t.Fatalf("Source = %q, want %q", got.Source, source)
+	}
+	if got.Path != "res://project.godot" {
+		t.Fatalf("Path = %q, want %q", got.Path, "res://project.godot")
+	}
+}
+
+func TestReadProjectSettings_MissingFile(t *testing.T) {
+	// A project root with no project.godot at all — e.g. Root pointed at a
+	// directory that isn't actually a Godot project.
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReadProjectSettings(context.Background(), ReadProjectSettingsParams{})
+	if err == nil {
+		t.Fatal("ReadProjectSettings with no project.godot present, want error")
 	}
 }

@@ -141,6 +141,44 @@ func (c *Client) ReadScript(_ context.Context, params ReadScriptParams) (*Script
 	}, nil
 }
 
+// ReadProjectSettingsParams are the parameters for the
+// read_project_settings operation. There are none: every Godot project has
+// exactly one project.godot at its root, so there is nothing to
+// parameterize (and, unlike ReadScript/ReadSceneTree, no path input at all
+// means no path-traversal surface for this operation).
+type ReadProjectSettingsParams struct{}
+
+// ProjectSettings is the raw contents of a project's project.godot file.
+type ProjectSettings struct {
+	// Path is always "res://project.godot" — present for consistency with
+	// ScriptContents' shape, not because it varies.
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// ReadProjectSettings reads the project's project.godot file's raw text.
+//
+// Like ReadScript, this never invokes Godot: project.godot is Godot's own
+// plain-text config format, and there's no engine capability needed to
+// return it verbatim. This is a read-only operation: it does not modify
+// project.godot or any other project state.
+func (c *Client) ReadProjectSettings(_ context.Context, _ ReadProjectSettingsParams) (*ProjectSettings, error) {
+	absPath, err := c.Root.Resolve("project.godot")
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_project_settings: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_project_settings: %w", err)
+	}
+
+	return &ProjectSettings{
+		Path:   "res://project.godot",
+		Source: string(data),
+	}, nil
+}
+
 // run invokes the operations script with a single fixed operation name and
 // a structured params payload, and decodes the structured result.
 //

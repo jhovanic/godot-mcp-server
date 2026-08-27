@@ -35,13 +35,21 @@ type ScriptReader interface {
 	ReadScript(ctx context.Context, params headless.ReadScriptParams) (*headless.ScriptContents, error)
 }
 
+// ProjectSettingsReader is the narrow interface the read_project_settings
+// tool depends on. Like ScriptReader, *headless.Client satisfies this
+// without ever invoking Godot.
+type ProjectSettingsReader interface {
+	ReadProjectSettings(ctx context.Context, params headless.ReadProjectSettingsParams) (*headless.ProjectSettings, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
 type Deps struct {
-	SceneTree SceneTreeReader
-	Script    ScriptReader
-	Logger    *audit.Logger
+	SceneTree       SceneTreeReader
+	Script          ScriptReader
+	ProjectSettings ProjectSettingsReader
+	Logger          *audit.Logger
 }
 
 // RegisterAll registers every tool this server exposes against server. This
@@ -49,6 +57,7 @@ type Deps struct {
 func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadSceneTree(server, deps)
 	registerReadScript(server, deps)
+	registerReadProjectSettings(server, deps)
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -101,5 +110,30 @@ func registerReadScript(server *mcp.Server, deps Deps) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
 		}, contents, nil
+	})
+}
+
+func registerReadProjectSettings(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_project_settings",
+		Description: "Read-only. Returns the raw text of the project's project.godot file. " +
+			"Takes no parameters — every Godot project has exactly one. Does not modify " +
+			"project.godot or any other project state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadProjectSettingsParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		settings, err := deps.ProjectSettings.ReadProjectSettings(ctx, args)
+		deps.Logger.LogResult("headless", "read_project_settings", args, settings, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, settings, nil
 	})
 }
