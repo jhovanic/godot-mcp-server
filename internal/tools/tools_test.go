@@ -28,6 +28,18 @@ func (f *fakeReader) ReadSceneTree(_ context.Context, params headless.ReadSceneT
 	return f.node, f.err
 }
 
+// fakeScriptReader is a test double for tools.ScriptReader.
+type fakeScriptReader struct {
+	gotParams headless.ReadScriptParams
+	contents  *headless.ScriptContents
+	err       error
+}
+
+func (f *fakeScriptReader) ReadScript(_ context.Context, params headless.ReadScriptParams) (*headless.ScriptContents, error) {
+	f.gotParams = params
+	return f.contents, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -58,7 +70,7 @@ func TestReadSceneTree_Success(t *testing.T) {
 	logger := audit.New(&logBuf)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
-	tools.RegisterAll(server, tools.Deps{Headless: reader, Logger: logger})
+	tools.RegisterAll(server, tools.Deps{SceneTree: reader, Logger: logger})
 
 	cs := connect(t, server)
 	ctx := context.Background()
@@ -119,7 +131,7 @@ func TestReadSceneTree_Error(t *testing.T) {
 	logger := audit.New(&logBuf)
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
-	tools.RegisterAll(server, tools.Deps{Headless: reader, Logger: logger})
+	tools.RegisterAll(server, tools.Deps{SceneTree: reader, Logger: logger})
 
 	cs := connect(t, server)
 	ctx := context.Background()
@@ -148,12 +160,107 @@ func TestReadSceneTree_Error(t *testing.T) {
 	}
 }
 
+func TestReadScript_Success(t *testing.T) {
+	reader := &fakeScriptReader{
+		contents: &headless.ScriptContents{
+			Path:   "res://scripts/player.gd",
+			Source: "extends Node\n",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{Script: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_script",
+		Arguments: map[string]any{"script_path": "scripts/player.gd"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.ScriptPath != "scripts/player.gd" {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	var gotContents headless.ScriptContents
+	if err := json.Unmarshal([]byte(text.Text), &gotContents); err != nil {
+		t.Fatalf("result content is not valid JSON: %v (%s)", err, text.Text)
+	}
+	if gotContents.Source != "extends Node\n" {
+		t.Fatalf("unexpected script contents in result: %+v", gotContents)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "read_script" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "read_script")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+	if entry.Tier != "headless" {
+		t.Errorf("audit entry tier = %q, want %q", entry.Tier, "headless")
+	}
+}
+
+func TestReadScript_Error(t *testing.T) {
+	wantErr := errors.New("boom: not a .gd file")
+	reader := &fakeScriptReader{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{Script: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_script",
+		Arguments: map[string]any{"script_path": "notes.txt"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
 func TestRegisterAll_NoWriteTools(t *testing.T) {
-	// This is a read-only vertical slice: assert no write-capable tool has
+	// This is a read-only tool set: assert no write-capable tool has
 	// slipped into the allowlist. Update this list deliberately when a
 	// write tool is intentionally added.
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
-	tools.RegisterAll(server, tools.Deps{Headless: &fakeReader{}, Logger: audit.New(&bytes.Buffer{})})
+	tools.RegisterAll(server, tools.Deps{
+		SceneTree: &fakeReader{},
+		Script:    &fakeScriptReader{},
+		Logger:    audit.New(&bytes.Buffer{}),
+	})
 
 	cs := connect(t, server)
 	list, err := cs.ListTools(context.Background(), nil)
@@ -161,7 +268,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	want := map[string]bool{"read_scene_tree": true}
+	want := map[string]bool{"read_scene_tree": true, "read_script": true}
 	if len(list.Tools) != len(want) {
 		t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(want), list.Tools)
 	}

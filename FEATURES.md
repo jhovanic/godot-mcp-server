@@ -29,7 +29,9 @@ changelog.
 - [x] Single fixed Go/GDScript operations entry point (name TBD — not required to be
       `godot_operations.gd`, that's just the convention seen in prior art)
 - [x] Read scene tree / node structure
-- [ ] Read script contents
+- [x] Read script contents (deliberately doesn't invoke Godot — `.gd` files are plain text, so
+      this is a validated direct file read, not a `godot --headless` round trip; see
+      `internal/headless.Client.ReadScript`'s doc comment)
 - [ ] Read project settings and resources
 - [ ] Scoped node property edit (structured, not free-form script edit)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)

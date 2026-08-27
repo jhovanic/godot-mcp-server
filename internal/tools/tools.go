@@ -27,18 +27,28 @@ type SceneTreeReader interface {
 	ReadSceneTree(ctx context.Context, params headless.ReadSceneTreeParams) (*headless.SceneNode, error)
 }
 
+// ScriptReader is the narrow interface the read_script tool depends on.
+// *headless.Client satisfies it too, even though ReadScript never actually
+// invokes Godot (see its doc comment) — from this package's point of view
+// it's still just "the thing that reads project files."
+type ScriptReader interface {
+	ReadScript(ctx context.Context, params headless.ReadScriptParams) (*headless.ScriptContents, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
 type Deps struct {
-	Headless SceneTreeReader
-	Logger   *audit.Logger
+	SceneTree SceneTreeReader
+	Script    ScriptReader
+	Logger    *audit.Logger
 }
 
 // RegisterAll registers every tool this server exposes against server. This
 // is the only function in the codebase that should call mcp.AddTool.
 func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadSceneTree(server, deps)
+	registerReadScript(server, deps)
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -49,7 +59,7 @@ func registerReadSceneTree(server *mcp.Server, deps Deps) {
 			"any other project state.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadSceneTreeParams) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
-		node, err := deps.Headless.ReadSceneTree(ctx, args)
+		node, err := deps.SceneTree.ReadSceneTree(ctx, args)
 		deps.Logger.LogResult("headless", "read_scene_tree", args, node, err, start)
 		if err != nil {
 			// Returning a plain error here is enough: AddTool's handler
@@ -66,5 +76,30 @@ func registerReadSceneTree(server *mcp.Server, deps Deps) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
 		}, node, nil
+	})
+}
+
+func registerReadScript(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_script",
+		Description: "Read-only. Returns the raw source text of a .gd script file under the " +
+			"configured project root. Does not modify the script file or any other project " +
+			"state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadScriptParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		contents, err := deps.Script.ReadScript(ctx, args)
+		deps.Logger.LogResult("headless", "read_script", args, contents, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(contents, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, contents, nil
 	})
 }

@@ -10,6 +10,12 @@ coverage.html
 go.work
 go.work.sum
 
+# Local dev Godot binary (used to run internal/headless's real-engine
+# integration tests without re-downloading every time — see
+# internal/headless/integration_test.go). CI downloads and checksum-verifies
+# its own copy (ci.yml), so this is never something to commit or ship.
+/.godot-bin/
+
 # Claude Code local state (never commit — user/machine-specific)
 .claude/settings.local.json
 

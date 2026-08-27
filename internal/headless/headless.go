@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -88,6 +89,56 @@ func (c *Client) ReadSceneTree(ctx context.Context, params ReadSceneTreeParams) 
 		return nil, fmt.Errorf("headless: read_scene_tree: %w", err)
 	}
 	return &node, nil
+}
+
+// ReadScriptParams are the parameters for the read_script operation.
+type ReadScriptParams struct {
+	// ScriptPath is the .gd path, relative to the project root, e.g.
+	// "scripts/player.gd". It is validated against Root before use.
+	ScriptPath string `json:"script_path" jsonschema:"path to a .gd script file, relative to the project root"`
+}
+
+// ScriptContents is a script's raw source text, as read from disk.
+type ScriptContents struct {
+	// Path is the script's res://-style path, echoed back for consistency
+	// with how the headless tier addresses project files elsewhere.
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// ReadScript reads a .gd script file's raw source text.
+//
+// Unlike ReadSceneTree, this never invokes Godot: GDScript files are plain
+// UTF-8 text, and Godot's own implementation of "read this file" would just
+// be FileAccess.open(path).get_as_text() — there is no engine capability
+// this operation actually needs. Skipping the engine round trip makes this
+// a plain validated file read: faster (no ~100-300ms process spawn per
+// call), a much smaller failure surface, and unit-testable without a Godot
+// binary at all. This is a read-only operation: it does not modify the
+// script file or any other project state.
+func (c *Client) ReadScript(_ context.Context, params ReadScriptParams) (*ScriptContents, error) {
+	absPath, err := c.Root.Resolve(params.ScriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_script: %w", err)
+	}
+	if filepath.Ext(absPath) != ".gd" {
+		return nil, fmt.Errorf("headless: read_script: not a .gd file: %s", params.ScriptPath)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_script: %w", err)
+	}
+
+	relPath, err := filepath.Rel(c.Root.String(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_script: computing project-relative path: %w", err)
+	}
+
+	return &ScriptContents{
+		Path:   "res://" + filepath.ToSlash(relPath),
+		Source: string(data),
+	}, nil
 }
 
 // run invokes the operations script with a single fixed operation name and
