@@ -375,15 +375,22 @@ func (c *Client) ReadImportSettings(_ context.Context, params ReadImportSettings
 	}, nil
 }
 
+// Vector2 is a two-component float vector, matching Godot's own Vector2
+// type. Used for properties like position and scale.
+type Vector2 struct {
+	X float64 `json:"x" jsonschema:"the vector's x component"`
+	Y float64 `json:"y" jsonschema:"the vector's y component"`
+}
+
 // SetNodePropertyParams are the parameters for the set_node_property
-// operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue
-// must be set — which one determines the GDScript-side type the property is
-// set to (see scripts/godot_operations.gd's _op_set_node_property), since
-// JSON itself doesn't distinguish int from float the way Go and GDScript
-// both do.
+// operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
+// Vector2Value must be set — which one determines the GDScript-side type the
+// property is set to (see scripts/godot_operations.gd's
+// _op_set_node_property), since JSON itself doesn't distinguish int from
+// float the way Go and GDScript both do.
 //
-// This is deliberately scoped to primitive values only. Godot node
-// properties also include compound types (Vector2, Color, resource
+// This is deliberately scoped to primitives plus Vector2 for now. Godot node
+// properties also include other compound types (Color, resource
 // references, ...); supporting those is a separate, larger design (how does
 // an AI client express a Color or a sub-resource reference as tool
 // arguments?) tracked as a future FEATURES.md item, not a variant of this
@@ -399,10 +406,11 @@ type SetNodePropertyParams struct {
 	// PropertyName is the node property to set, e.g. "visible" or "z_index".
 	PropertyName string `json:"property_name" jsonschema:"the node property to set, e.g. \"visible\" or \"z_index\""`
 
-	StringValue *string  `json:"string_value,omitempty" jsonschema:"set property_name to this string value; exactly one of the *_value fields must be set"`
-	IntValue    *int64   `json:"int_value,omitempty" jsonschema:"set property_name to this integer value; exactly one of the *_value fields must be set"`
-	FloatValue  *float64 `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
-	BoolValue   *bool    `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
+	StringValue  *string  `json:"string_value,omitempty" jsonschema:"set property_name to this string value; exactly one of the *_value fields must be set"`
+	IntValue     *int64   `json:"int_value,omitempty" jsonschema:"set property_name to this integer value; exactly one of the *_value fields must be set"`
+	FloatValue   *float64 `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
+	BoolValue    *bool    `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
+	Vector2Value *Vector2 `json:"vector2_value,omitempty" jsonschema:"set property_name to this Vector2 value (e.g. position, scale); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -457,13 +465,13 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 	}
 
 	valuesSet := 0
-	for _, set := range []bool{params.StringValue != nil, params.IntValue != nil, params.FloatValue != nil, params.BoolValue != nil} {
+	for _, set := range []bool{params.StringValue != nil, params.IntValue != nil, params.FloatValue != nil, params.BoolValue != nil, params.Vector2Value != nil} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -483,6 +491,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		IntValue     *int64   `json:"int_value,omitempty"`
 		FloatValue   *float64 `json:"float_value,omitempty"`
 		BoolValue    *bool    `json:"bool_value,omitempty"`
+		Vector2Value *Vector2 `json:"vector2_value,omitempty"`
 	}{
 		Path:         resPath,
 		NodePath:     params.NodePath,
@@ -491,6 +500,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		IntValue:     params.IntValue,
 		FloatValue:   params.FloatValue,
 		BoolValue:    params.BoolValue,
+		Vector2Value: params.Vector2Value,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

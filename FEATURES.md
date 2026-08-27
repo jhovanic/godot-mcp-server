@@ -52,10 +52,10 @@ changelog.
       settings — no Godot round trip. Takes the asset's own path (e.g. `icon.png`), not the
       `.import` file's path, and reads the sibling `<path>.import`
 - [x] Scoped node property edit (structured, not free-form script edit) — tool `set_node_property`:
-      primitive values only (string/int/float/bool) for now, richer value types (Vector2, Color,
-      resource references, ...) are a separate future item. Only registered under
-      `-mode read-write`. Note: writes go through Godot's own scene re-pack/save, so the result is
-      Godot's full current serialization of the scene, not a minimal diff (see
+      primitives (string/int/float/bool) plus Vector2 for now, richer value types (Color, resource
+      references, ...) are a separate future item. Only registered under `-mode read-write`. Note:
+      writes go through Godot's own scene re-pack/save, so the result is Godot's full current
+      serialization of the scene, not a minimal diff (see
       `internal/headless.Client.SetNodeProperty`'s doc comment)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)

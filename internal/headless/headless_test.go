@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jhovanic/godot-mcp-server/internal/validate"
@@ -463,6 +464,52 @@ func TestSetNodeProperty_RejectsEmptyPropertyName(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("SetNodeProperty with empty property_name, want error")
+	}
+}
+
+// Vector2Value participates in the same "exactly one *_value field" count as
+// the primitive fields, and is otherwise a valid lone value — proven here
+// without a real Godot binary the same way the primitive rejection tests
+// are: newDirectReadTestClient's garbage GodotBin means any error returned
+// once validation passes comes from failing to exec Godot, not from the
+// values-set check.
+
+func TestSetNodeProperty_Vector2AloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "position",
+		Vector2Value: &Vector2{X: 1, Y: 2},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone vector2_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone vector2_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsVector2PlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	strVal := "hello"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "position",
+		StringValue:  &strVal,
+		Vector2Value: &Vector2{X: 1, Y: 2},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with string_value and vector2_value both set, want error")
 	}
 }
 

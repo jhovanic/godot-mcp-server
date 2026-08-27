@@ -808,6 +808,46 @@ func TestSetNodeProperty_Success(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_Vector2Success(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "",
+			PropertyName:  "position",
+			PreviousValue: "(0, 0)",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "",
+			"property_name": "position",
+			"vector2_value": map[string]any{"x": 1.5, "y": -2.5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.Vector2Value == nil || setter.gotParams.Vector2Value.X != 1.5 || setter.gotParams.Vector2Value.Y != -2.5 {
+		t.Fatalf("handler did not pass through vector2_value, got %+v", setter.gotParams.Vector2Value)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

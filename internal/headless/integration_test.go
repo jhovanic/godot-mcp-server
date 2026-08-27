@@ -244,10 +244,10 @@ func writeMinimalPNG(t *testing.T, path string) {
 // that fixture is shared with the read-only scene-tree tests and must stay
 // pristine (SetNodeProperty writes the scene file it's given). "Main" (a
 // Node2D, which carries a real float property in rotation, a real int
-// property in z_index, and a real bool property in visible) has one child,
-// "Label" (a Label, which carries a real String property in text) — between
-// them, every primitive value type SetNodeProperty supports has a genuine
-// target property to exercise.
+// property in z_index, a real bool property in visible, and a real Vector2
+// property in position) has one child, "Label" (a Label, which carries a
+// real String property in text) — between them, every value type
+// SetNodeProperty supports has a genuine target property to exercise.
 func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
 	t.Helper()
 	const scene = `[gd_scene load_steps=1 format=3]
@@ -382,6 +382,31 @@ func TestSetNodeProperty_RealGodot_Bool(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "visible = false") {
 		t.Errorf("saved scene missing expected visible property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Vector2(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "position",
+		Vector2Value: &Vector2{X: 1.5, Y: -2.5},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "position = Vector2(1.5, -2.5)") {
+		t.Errorf("saved scene missing expected position property: %s", data)
 	}
 }
 

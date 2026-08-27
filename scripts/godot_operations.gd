@@ -137,10 +137,11 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 
 
 ## set_node_property: loads a .tscn file (already-validated res:// path),
-## sets exactly one primitive property (string/int/float/bool — the caller
-## sends exactly one of string_value/int_value/float_value/bool_value) on
-## one node addressed by node_path (relative to the scene root; empty string
-## means the root itself), then re-packs and saves the scene.
+## sets exactly one property (string/int/float/bool/Vector2 — the caller
+## sends exactly one of string_value/int_value/float_value/bool_value/
+## vector2_value) on one node addressed by node_path (relative to the scene
+## root; empty string means the root itself), then re-packs and saves the
+## scene.
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
@@ -171,8 +172,12 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 	if params.get("bool_value") != null:
 		value = bool(params["bool_value"])
 		values_set += 1
+	if params.get("vector2_value") != null:
+		var v: Dictionary = params["vector2_value"]
+		value = Vector2(float(v.get("x", 0.0)), float(v.get("y", 0.0)))
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)
