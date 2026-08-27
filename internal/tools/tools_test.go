@@ -1053,6 +1053,94 @@ func TestSetNodeProperty_QuaternionSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_Rect2Success(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Sprite",
+			PropertyName:  "region_rect",
+			PreviousValue: "[P: (0, 0), S: (0, 0)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Sprite",
+			"property_name": "region_rect",
+			"rect2_value": map[string]any{
+				"position": map[string]any{"x": 1.5, "y": 2.5},
+				"size":     map[string]any{"x": 10, "y": 20},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Rect2Value
+	if got == nil || got.Position.X != 1.5 || got.Position.Y != 2.5 || got.Size.X != 10 || got.Size.Y != 20 {
+		t.Fatalf("handler did not pass through rect2_value, got %+v", got)
+	}
+}
+
+func TestSetNodeProperty_Rect2iSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Win",
+			PropertyName:  "nonclient_area",
+			PreviousValue: "[P: (0, 0), S: (0, 0)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Win",
+			"property_name": "nonclient_area",
+			"rect2i_value": map[string]any{
+				"position": map[string]any{"x": 1, "y": 2},
+				"size":     map[string]any{"x": 3, "y": 4},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Rect2iValue
+	if got == nil || got.Position.X != 1 || got.Position.Y != 2 || got.Size.X != 3 || got.Size.Y != 4 {
+		t.Fatalf("handler did not pass through rect2i_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

@@ -642,6 +642,125 @@ func TestSetNodeProperty_RealGodot_Vector3i(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_Rect2 targets Sprite2D's "region_rect",
+// which — unlike frame_coords (see TestSetNodeProperty_RealGodot_Vector2i
+// above) — is a genuinely stored property, not a synthetic accessor: the
+// saved .tscn line matches the request directly.
+func TestSetNodeProperty_RealGodot_Rect2(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Sprite",
+		PropertyName: "region_rect",
+		Rect2Value: &Rect2{
+			Position: Vector2{X: 1.5, Y: 2.5},
+			Size:     Vector2{X: 10, Y: 20},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "region_rect = Rect2(1.5, 2.5, 10, 20)") {
+		t.Errorf("saved scene missing expected region_rect property: %s", data)
+	}
+}
+
+// rect2iFixtureClient builds a separate, minimal fixture project from
+// setNodePropertyFixtureClient's shared one: Rect2i has exactly one
+// built-in Node target in the whole engine, Window.nonclient_area (verified
+// via the same ClassDB introspection approach used to establish that
+// Vector3i has none — see writeSetNodePropertyFixtureScene's doc comment),
+// and instantiating a Window node leaks a rendering viewport/RIDs at
+// process exit (Godot prints ERROR/WARNING lines about it, though it
+// doesn't fail the run). Keeping the Window node confined to its own
+// throwaway fixture avoids adding that noise to every other
+// SetNodeProperty test, which all share setNodePropertyFixtureClient's
+// scene.
+func rect2iFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	const setupScript = `extends SceneTree
+
+func _init() -> void:
+	var main := Node2D.new()
+	main.name = "Main"
+
+	var win := Window.new()
+	win.name = "Win"
+	main.add_child(win)
+	win.owner = main
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(main)
+	if pack_err != OK:
+		push_error("failed to pack fixture scene: %d" % pack_err)
+	var save_err := ResourceSaver.save(packed, "res://main.tscn")
+	if save_err != OK:
+		push_error("failed to save fixture scene: %d" % save_err)
+	quit()
+`
+	scriptPath := filepath.Join(projectDir, "generate_rect2i_fixture.gd")
+	if err := os.WriteFile(scriptPath, []byte(setupScript), 0o644); err != nil {
+		t.Fatalf("writing fixture-generation script: %v", err)
+	}
+
+	// #nosec G204 -- test-only, fixed argv, godotBin/projectDir/scriptPath
+	// are all test-controlled, not external input.
+	cmd := exec.Command(godotBin, "--headless", "--path", projectDir, "--script", scriptPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generating rect2i fixture scene: %v\n%s", err, out)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestSetNodeProperty_RealGodot_Rect2i(t *testing.T) {
+	c := rect2iFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Win",
+		PropertyName: "nonclient_area",
+		Rect2iValue: &Rect2i{
+			Position: Vector2i{X: 1, Y: 2},
+			Size:     Vector2i{X: 3, Y: 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "nonclient_area = Rect2i(1, 2, 3, 4)") {
+		t.Errorf("saved scene missing expected nonclient_area property: %s", data)
+	}
+}
+
 func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	c := setNodePropertyFixtureClient(t)
 

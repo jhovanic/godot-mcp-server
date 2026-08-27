@@ -72,7 +72,7 @@ changelog.
           for this tool regardless
     - [x] Quaternion — 4-float rotation representation, alternative to Euler angles; same
           fixed-arity pattern as the vectors above, new only in what it's used for
-    - [ ] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision
+    - [x] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision
           bounds
     - [ ] Plane — a Vector3 normal plus a float distance
     - [ ] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)

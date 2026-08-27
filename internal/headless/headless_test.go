@@ -717,6 +717,86 @@ func TestSetNodeProperty_RejectsQuaternionPlusOtherValue(t *testing.T) {
 	}
 }
 
+// Rect2Value and Rect2iValue participate in the same "exactly one *_value
+// field" count as the other value fields, proven the same way as
+// Vector2AloneIsValid above.
+
+func TestSetNodeProperty_Rect2AloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "region_rect",
+		Rect2Value:   &Rect2{Position: Vector2{X: 1, Y: 2}, Size: Vector2{X: 3, Y: 4}},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone rect2_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone rect2_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsRect2PlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "region_rect",
+		Rect2Value:   &Rect2{Position: Vector2{X: 1, Y: 2}, Size: Vector2{X: 3, Y: 4}},
+		Vector2Value: &Vector2{X: 1, Y: 2},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with rect2_value and vector2_value both set, want error")
+	}
+}
+
+func TestSetNodeProperty_Rect2iAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "nonclient_area",
+		Rect2iValue:  &Rect2i{Position: Vector2i{X: 1, Y: 2}, Size: Vector2i{X: 3, Y: 4}},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone rect2i_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone rect2i_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsRect2iPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "nonclient_area",
+		Rect2iValue:   &Rect2i{Position: Vector2i{X: 1, Y: 2}, Size: Vector2i{X: 3, Y: 4}},
+		Vector2iValue: &Vector2i{X: 1, Y: 2},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with rect2i_value and vector2i_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable
