@@ -1,0 +1,85 @@
+# godot-mcp-server
+
+A self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server for Godot, written in Go.
+
+## Why this exists
+
+Existing Godot MCP servers are third-party tools you don't control — you can't fully audit what
+they do, and several expose broad code-execution surfaces (arbitrary GDScript `eval`-style tools,
+unrestricted filesystem access). `godot-mcp-server` is built with the opposite default: a small,
+explicit, auditable set of operations, no arbitrary code execution, and a trust boundary you can
+actually reason about.
+
+If you're a solo dev who wants AI-assisted Godot workflows without handing an LLM a shell into
+your project, this is for you.
+
+## Architecture
+
+Two tiers, because Godot has two surfaces worth touching:
+
+```
+AI client (MCP)
+      |
+ MCP server (Go) — you control the tool list
+      |
+      +-- Headless CLI tier --- scoped file ops via `godot --headless --script`, no eval
+      |
+      +-- TCP runtime tier ---- localhost-only socket, live game/editor interaction
+                |
+          Godot project (scenes, scripts, running game)
+```
+
+- **Headless CLI tier** — reads/edits scene trees, scripts, and resources by invoking Godot
+  headless with a single fixed operations script. Structured JSON in, structured JSON out. No
+  temp-script generation, no `eval`.
+- **TCP runtime tier** — an autoload script inside the target project listens on a localhost-only
+  socket for read/interact commands against a *running* game or editor session.
+
+Every tool is an explicit, parameterized operation. There is no generic "run this code" tool, and
+there isn't going to be one — see [SECURITY.md](./SECURITY.md).
+
+## Status
+
+Early development. Not yet released. Follow [FEATURES.md](./FEATURES.md) for what's planned and
+what's shipped.
+
+## Installation
+
+_Release binaries via GitHub Releases are planned but not yet published. Once available:_
+
+```bash
+# download the binary for your platform from the Releases page, or:
+go install github.com/jhovanic/godot-mcp-server/cmd/godot-mcp-server@latest
+```
+
+## Usage
+
+Point your MCP client (Claude Code, Claude Desktop, etc.) at the binary. Example config:
+
+```json
+{
+  "mcpServers": {
+    "godot": {
+      "command": "godot-mcp-server",
+      "args": ["--project", "/path/to/your/godot/project"]
+    }
+  }
+}
+```
+
+Full configuration reference is TBD as the tool surface stabilizes.
+
+## Security
+
+Read [SECURITY.md](./SECURITY.md) before pointing this at a project you care about. Short version:
+scoped operations only, path-allowlisted to the project root, TCP tier bound to localhost, no
+arbitrary code execution, and that's a permanent design constraint, not a v1 limitation.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Priority order for this project is **security, then
+features, then quality-of-life** — contributions are evaluated against that order.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

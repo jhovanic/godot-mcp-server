@@ -1,0 +1,59 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: godot-mcp-server
+    main: ./cmd/godot-mcp-server
+    binary: godot-mcp-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.serverVersion={{ .Version }}
+
+archives:
+  - id: default
+    ids:
+      - godot-mcp-server
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Ship the fixed headless-tier operations script alongside the binary:
+    # cmd/godot-mcp-server's default -operations-script path resolves it as
+    # scripts/godot_operations.gd next to the executable.
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - src: scripts/godot_operations.gd
+        dst: scripts/godot_operations.gd
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: jhovanic
+    name: godot-mcp-server
+  # Signed release binaries (cosign/goreleaser signing) are tracked as an
+  # open item in FEATURES.md — deliberately not added here since it
+  # requires provisioning a signing key/secret, which is a decision for
+  # the maintainer, not something to wire up silently.
