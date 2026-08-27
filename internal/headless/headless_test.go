@@ -838,6 +838,47 @@ func TestSetNodeProperty_RejectsPlanePlusOtherValue(t *testing.T) {
 	}
 }
 
+// AABBValue participates in the same "exactly one *_value field" count as
+// the other value fields, proven the same way as Vector2AloneIsValid above.
+
+func TestSetNodeProperty_AABBAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "aabb",
+		AABBValue:    &AABB{Position: Vector3{X: 1, Y: 2, Z: 3}, Size: Vector3{X: 4, Y: 5, Z: 6}},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone aabb_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone aabb_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsAABBPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "aabb",
+		AABBValue:    &AABB{Position: Vector3{X: 1, Y: 2, Z: 3}, Size: Vector3{X: 4, Y: 5, Z: 6}},
+		Vector3Value: &Vector3{X: 1, Y: 2, Z: 3},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with aabb_value and vector3_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

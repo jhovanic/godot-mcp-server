@@ -1182,6 +1182,50 @@ func TestSetNodeProperty_PlaneSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_AABBSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Notifier",
+			PropertyName:  "aabb",
+			PreviousValue: "[P: (0, 0, 0), S: (0, 0, 0)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Notifier",
+			"property_name": "aabb",
+			"aabb_value": map[string]any{
+				"position": map[string]any{"x": 1, "y": 2, "z": 3},
+				"size":     map[string]any{"x": 4, "y": 5, "z": 6},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.AABBValue
+	if got == nil || got.Position.X != 1 || got.Position.Y != 2 || got.Position.Z != 3 || got.Size.X != 4 || got.Size.Y != 5 || got.Size.Z != 6 {
+		t.Fatalf("handler did not pass through aabb_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

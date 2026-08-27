@@ -77,7 +77,7 @@ changelog.
     - [x] Plane — a Vector3 normal plus a float distance. Note: like Vector3i, no built-in Node
           class exposes a Plane property (the only one in the engine is a Resource property), so
           its real-Godot test target is a custom script-exported property too
-    - [ ] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)
+    - [x] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)
     - [ ] Basis — a 3x3 matrix (9 floats); 3D rotation/scale without translation
     - [ ] Transform2D / Transform3D — the actual stored representation behind a node's own
           transform. Note from building Vector3 support: Node3D's `position`/`rotation`/`scale`
