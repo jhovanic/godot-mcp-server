@@ -3,6 +3,9 @@ package headless
 import (
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,5 +218,68 @@ func TestReadBinaryResource_RealGodot_MissingResource(t *testing.T) {
 	_, err = c.ReadBinaryResource(ctx, ReadBinaryResourceParams{ResourcePath: "does_not_exist.res"})
 	if err == nil {
 		t.Fatal("ReadBinaryResource for a missing resource, want error")
+	}
+}
+
+// writeMinimalPNG writes a valid 1x1 PNG — a real, importable asset type —
+// using only the standard library, so this test doesn't depend on any
+// external image tooling being available.
+func writeMinimalPNG(t *testing.T, path string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating png: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatalf("encoding png: %v", err)
+	}
+}
+
+func TestReadImportSettings_RealGodot(t *testing.T) {
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	writeMinimalPNG(t, filepath.Join(projectDir, "icon.png"))
+
+	// ReadImportSettings never invokes Godot itself (it's a plain file
+	// read, like ReadProjectSettings) — but the .import sidecar it reads
+	// only exists because Godot's own import pipeline generated it, which
+	// is what this triggers: a brief headless editor run, exactly what a
+	// real project accumulates from having been opened once. This is
+	// test-only setup, unrelated to scripts/godot_operations.gd.
+	// #nosec G204 -- test-only, fixed argv, all test-controlled.
+	cmd := exec.Command(godotBin, "--headless", "--editor", "--quit-after", "20", "--path", projectDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("triggering asset import: %v\n%s", err, out)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	c := &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got, err := c.ReadImportSettings(ctx, ReadImportSettingsParams{AssetPath: "icon.png"})
+	if err != nil {
+		t.Fatalf("ReadImportSettings against a real Godot-generated .import file: %v", err)
+	}
+	if got.Path != "res://icon.png.import" {
+		t.Errorf("Path = %q, want %q", got.Path, "res://icon.png.import")
+	}
+	if !strings.Contains(got.Source, "[remap]") {
+		t.Errorf("Source missing expected [remap] section: %s", got.Source)
+	}
+	if !strings.Contains(got.Source, `importer="texture"`) {
+		t.Errorf("Source missing expected importer field: %s", got.Source)
 	}
 }

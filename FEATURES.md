@@ -44,10 +44,14 @@ changelog.
       is file-based — there's no in-memory "serialize to a string" API), writing only to a
       Go-generated temp path outside the project root, never anything the AI client sees or
       controls, cleaned up before the call returns
+- [x] Asset/import inspection — tool `read_import_settings`: `.import` sidecar files are plain
+      `ConfigFile`-style text (same as `project.godot`), generated next to an asset once a
+      project's been opened/imported at least once, so this is a direct read like project
+      settings — no Godot round trip. Takes the asset's own path (e.g. `icon.png`), not the
+      `.import` file's path, and reads the sibling `<path>.import`
 - [ ] Scoped node property edit (structured, not free-form script edit)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)
-- [ ] Asset/import inspection
 
 ### TCP runtime tier
 - [ ] Autoload listener script (localhost-only) for live editor/game state

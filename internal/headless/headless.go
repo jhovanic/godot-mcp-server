@@ -326,6 +326,55 @@ func (c *Client) ReadBinaryResource(ctx context.Context, params ReadBinaryResour
 	}, nil
 }
 
+// ReadImportSettingsParams are the parameters for the read_import_settings
+// operation.
+type ReadImportSettingsParams struct {
+	// AssetPath is the imported asset's own path, relative to the project
+	// root, e.g. "textures/icon.png" — not the .import file's path. It is
+	// validated against Root before use.
+	AssetPath string `json:"asset_path" jsonschema:"path to the imported asset, relative to the project root (not the .import file itself)"`
+}
+
+// ImportSettings is the raw contents of an asset's <path>.import file.
+type ImportSettings struct {
+	// Path is the .import file's own res://-style path (AssetPath with
+	// ".import" appended) — what Source's bytes actually come from.
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// ReadImportSettings reads the raw text of an imported asset's <path>.import
+// sidecar file.
+//
+// Like ReadProjectSettings, this never invokes Godot: .import files are
+// Godot's own plain-text ConfigFile-style format (the same style
+// project.godot uses), generated next to an asset once a project has been
+// opened/imported at least once. There's no engine capability needed to
+// return it verbatim. This is a read-only operation: it does not modify the
+// .import file, the asset it describes, or any other project state.
+func (c *Client) ReadImportSettings(_ context.Context, params ReadImportSettingsParams) (*ImportSettings, error) {
+	absAssetPath, err := c.Root.Resolve(params.AssetPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_import_settings: %w", err)
+	}
+	absImportPath := absAssetPath + ".import"
+
+	data, err := os.ReadFile(absImportPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_import_settings: %w (no .import sidecar — the asset may not be an importable type, or the project hasn't been opened/imported yet)", err)
+	}
+
+	relImportPath, err := filepath.Rel(c.Root.String(), absImportPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_import_settings: computing project-relative path: %w", err)
+	}
+
+	return &ImportSettings{
+		Path:   "res://" + filepath.ToSlash(relImportPath),
+		Source: string(data),
+	}, nil
+}
+
 // run invokes the operations script with a single fixed operation name and
 // a structured params payload, and decodes the structured result.
 //

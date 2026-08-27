@@ -58,6 +58,13 @@ type BinaryResourceReader interface {
 	ReadBinaryResource(ctx context.Context, params headless.ReadBinaryResourceParams) (*headless.BinaryResourceContents, error)
 }
 
+// ImportSettingsReader is the narrow interface the read_import_settings
+// tool depends on. Like ScriptReader, *headless.Client satisfies this
+// without ever invoking Godot.
+type ImportSettingsReader interface {
+	ReadImportSettings(ctx context.Context, params headless.ReadImportSettingsParams) (*headless.ImportSettings, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -67,6 +74,7 @@ type Deps struct {
 	ProjectSettings ProjectSettingsReader
 	TextResource    TextResourceReader
 	BinaryResource  BinaryResourceReader
+	ImportSettings  ImportSettingsReader
 	Logger          *audit.Logger
 }
 
@@ -78,6 +86,7 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadProjectSettings(server, deps)
 	registerReadTextResource(server, deps)
 	registerReadBinaryResource(server, deps)
+	registerReadImportSettings(server, deps)
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -181,6 +190,34 @@ func registerReadTextResource(server *mcp.Server, deps Deps) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
 		}, contents, nil
+	})
+}
+
+func registerReadImportSettings(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_import_settings",
+		Description: "Read-only. Returns the raw text of an imported asset's <path>.import " +
+			"sidecar file (import settings such as compression, mipmaps, or filters) under the " +
+			"configured project root. Takes the asset's own path, not the .import file's path. " +
+			"Fails if the asset hasn't been imported (project never opened in the editor, or " +
+			"not an importable type). Does not modify the .import file, the asset, or any " +
+			"other project state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadImportSettingsParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		settings, err := deps.ImportSettings.ReadImportSettings(ctx, args)
+		deps.Logger.LogResult("headless", "read_import_settings", args, settings, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, settings, nil
 	})
 }
 

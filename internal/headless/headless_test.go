@@ -330,3 +330,59 @@ func TestReadBinaryResource_RejectsOtherExtensions(t *testing.T) {
 		t.Fatal("ReadBinaryResource on a non-.res file, want error")
 	}
 }
+
+// ReadImportSettings never invokes Godot: .import files are plain
+// ConfigFile-style text, the same as project.godot, so there's no engine
+// capability this operation needs.
+
+func TestReadImportSettings_Success(t *testing.T) {
+	dir := t.TempDir()
+	const source = "[remap]\n\nimporter=\"texture\"\ntype=\"CompressedTexture2D\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "icon.png"), []byte("not a real png, just needs to exist"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "icon.png.import"), []byte(source), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	got, err := c.ReadImportSettings(context.Background(), ReadImportSettingsParams{AssetPath: "icon.png"})
+	if err != nil {
+		t.Fatalf("ReadImportSettings: %v", err)
+	}
+	if got.Source != source {
+		t.Fatalf("Source = %q, want %q", got.Source, source)
+	}
+	if got.Path != "res://icon.png.import" {
+		t.Fatalf("Path = %q, want %q", got.Path, "res://icon.png.import")
+	}
+}
+
+func TestReadImportSettings_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReadImportSettings(context.Background(), ReadImportSettingsParams{AssetPath: "../outside.png"})
+	if err == nil {
+		t.Fatal("ReadImportSettings with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("ReadImportSettings error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestReadImportSettings_MissingImportFile(t *testing.T) {
+	dir := t.TempDir()
+	// The asset exists but was never imported (or isn't an importable
+	// type), so there's no <path>.import sidecar.
+	if err := os.WriteFile(filepath.Join(dir, "icon.png"), []byte("not imported"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReadImportSettings(context.Background(), ReadImportSettingsParams{AssetPath: "icon.png"})
+	if err == nil {
+		t.Fatal("ReadImportSettings with no .import sidecar, want error")
+	}
+}

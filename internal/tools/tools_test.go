@@ -74,6 +74,18 @@ func (f *fakeBinaryResourceReader) ReadBinaryResource(_ context.Context, params 
 	return f.contents, f.err
 }
 
+// fakeImportSettingsReader is a test double for tools.ImportSettingsReader.
+type fakeImportSettingsReader struct {
+	gotParams headless.ReadImportSettingsParams
+	settings  *headless.ImportSettings
+	err       error
+}
+
+func (f *fakeImportSettingsReader) ReadImportSettings(_ context.Context, params headless.ReadImportSettingsParams) (*headless.ImportSettings, error) {
+	f.gotParams = params
+	return f.settings, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -549,6 +561,97 @@ func TestReadBinaryResource_Error(t *testing.T) {
 	}
 }
 
+func TestReadImportSettings_Success(t *testing.T) {
+	reader := &fakeImportSettingsReader{
+		settings: &headless.ImportSettings{
+			Path:   "res://icon.png.import",
+			Source: "[remap]\n\nimporter=\"texture\"\n",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{ImportSettings: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_import_settings",
+		Arguments: map[string]any{"asset_path": "icon.png"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.AssetPath != "icon.png" {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("want TextContent, got %T", res.Content[0])
+	}
+	var gotSettings headless.ImportSettings
+	if err := json.Unmarshal([]byte(text.Text), &gotSettings); err != nil {
+		t.Fatalf("result content is not valid JSON: %v (%s)", err, text.Text)
+	}
+	if gotSettings.Source != "[remap]\n\nimporter=\"texture\"\n" {
+		t.Fatalf("unexpected import settings in result: %+v", gotSettings)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "read_import_settings" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "read_import_settings")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+	if entry.Tier != "headless" {
+		t.Errorf("audit entry tier = %q, want %q", entry.Tier, "headless")
+	}
+}
+
+func TestReadImportSettings_Error(t *testing.T) {
+	wantErr := errors.New("boom: no .import sidecar")
+	reader := &fakeImportSettingsReader{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, tools.Deps{ImportSettings: reader, Logger: logger})
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_import_settings",
+		Arguments: map[string]any{"asset_path": "not_imported.png"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
 func TestRegisterAll_NoWriteTools(t *testing.T) {
 	// This is a read-only tool set: assert no write-capable tool has
 	// slipped into the allowlist. Update this list deliberately when a
@@ -560,6 +663,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		ProjectSettings: &fakeProjectSettingsReader{},
 		TextResource:    &fakeTextResourceReader{},
 		BinaryResource:  &fakeBinaryResourceReader{},
+		ImportSettings:  &fakeImportSettingsReader{},
 		Logger:          audit.New(&bytes.Buffer{}),
 	})
 
@@ -575,6 +679,7 @@ func TestRegisterAll_NoWriteTools(t *testing.T) {
 		"read_project_settings": true,
 		"read_text_resource":    true,
 		"read_binary_resource":  true,
+		"read_import_settings":  true,
 	}
 	if len(list.Tools) != len(want) {
 		t.Fatalf("unexpected tool count %d, want %d: %+v", len(list.Tools), len(want), list.Tools)
