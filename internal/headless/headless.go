@@ -179,6 +179,70 @@ func (c *Client) ReadProjectSettings(_ context.Context, _ ReadProjectSettingsPar
 	}, nil
 }
 
+// ReadTextResourceParams are the parameters for the read_text_resource
+// operation.
+type ReadTextResourceParams struct {
+	// ResourcePath is the .tres path, relative to the project root, e.g.
+	// "materials/red.tres". It is validated against Root before use.
+	ResourcePath string `json:"resource_path" jsonschema:"path to a .tres text resource file, relative to the project root"`
+}
+
+// TextResourceContents is a text resource's raw source, as read from disk.
+type TextResourceContents struct {
+	// Path is the resource's res://-style path, echoed back for consistency
+	// with how the headless tier addresses project files elsewhere.
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
+// ReadTextResource reads a .tres text resource file's raw source text.
+//
+// Like ReadScript, this never invokes Godot: .tres is Godot's own
+// human-readable text serialization for resources (the same style of
+// format .tscn uses for scenes), so there's no engine capability needed to
+// return it verbatim.
+//
+// This is deliberately scoped to .tres only — hence "TextResource" rather
+// than a bare "Resource" name, which would misleadingly suggest it also
+// covers Godot's other resource format, .res. .res is binary-packed, and
+// reading it meaningfully would need a real Godot round trip to decode, the
+// same way ReadSceneTree needs Godot to instantiate a .tscn's node graph:
+// a genuinely different implementation strategy, not a variant of this one.
+// That's tracked as a separate, still-open FEATURES.md item and, when
+// built, should be its own tool rather than a branch bolted onto this one.
+// This is a read-only operation: it does not modify the resource file or
+// any other project state.
+func (c *Client) ReadTextResource(_ context.Context, params ReadTextResourceParams) (*TextResourceContents, error) {
+	absPath, err := c.Root.Resolve(params.ResourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_text_resource: %w", err)
+	}
+
+	switch filepath.Ext(absPath) {
+	case ".tres":
+		// supported
+	case ".res":
+		return nil, fmt.Errorf("headless: read_text_resource: %s is a binary .res resource — not supported by this operation, since decoding it meaningfully would need a real Godot round trip; only .tres text resources are supported", params.ResourcePath)
+	default:
+		return nil, fmt.Errorf("headless: read_text_resource: not a .tres file: %s", params.ResourcePath)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_text_resource: %w", err)
+	}
+
+	relPath, err := filepath.Rel(c.Root.String(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: read_text_resource: computing project-relative path: %w", err)
+	}
+
+	return &TextResourceContents{
+		Path:   "res://" + filepath.ToSlash(relPath),
+		Source: string(data),
+	}, nil
+}
+
 // run invokes the operations script with a single fixed operation name and
 // a structured params payload, and decodes the structured result.
 //

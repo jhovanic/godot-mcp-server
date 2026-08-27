@@ -102,11 +102,12 @@ func TestReadSceneTree_RejectsOutOfRootPath(t *testing.T) {
 	}
 }
 
-// ReadScript and ReadProjectSettings never invoke Godot at all — both read
-// plain text files directly, so there's no engine capability either
-// operation needs. GodotBin and OperationsScript are set to garbage below
-// specifically to prove that: if either ever started shelling out, these
-// tests would fail loudly instead of silently doing the wrong thing.
+// ReadScript, ReadProjectSettings, and ReadTextResource never invoke Godot
+// at all — each reads a plain text file directly, so there's no engine
+// capability any of them needs. GodotBin and OperationsScript are set to
+// garbage below specifically to prove that: if any of them ever started
+// shelling out, these tests would fail loudly instead of silently doing the
+// wrong thing.
 func newDirectReadTestClient(t *testing.T, projectRoot string) *Client {
 	t.Helper()
 	root, err := validate.NewRoot(projectRoot)
@@ -208,5 +209,78 @@ func TestReadProjectSettings_MissingFile(t *testing.T) {
 	_, err := c.ReadProjectSettings(context.Background(), ReadProjectSettingsParams{})
 	if err == nil {
 		t.Fatal("ReadProjectSettings with no project.godot present, want error")
+	}
+}
+
+func TestReadTextResource_Success(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "materials"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const source = "[gd_resource type=\"StandardMaterial3D\" format=3]\n\n[resource]\nalbedo_color = Color(1, 0, 0, 1)\n"
+	if err := os.WriteFile(filepath.Join(dir, "materials", "red.tres"), []byte(source), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	got, err := c.ReadTextResource(context.Background(), ReadTextResourceParams{ResourcePath: "materials/red.tres"})
+	if err != nil {
+		t.Fatalf("ReadTextResource: %v", err)
+	}
+	if got.Source != source {
+		t.Fatalf("Source = %q, want %q", got.Source, source)
+	}
+	if got.Path != "res://materials/red.tres" {
+		t.Fatalf("Path = %q, want %q", got.Path, "res://materials/red.tres")
+	}
+}
+
+func TestReadTextResource_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReadTextResource(context.Background(), ReadTextResourceParams{ResourcePath: "../outside.tres"})
+	if err == nil {
+		t.Fatal("ReadTextResource with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("ReadTextResource error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestReadTextResource_RejectsBinaryRes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "packed.res"), []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReadTextResource(context.Background(), ReadTextResourceParams{ResourcePath: "packed.res"})
+	if err == nil {
+		t.Fatal("ReadTextResource on a .res file, want error")
+	}
+}
+
+func TestReadTextResource_RejectsOtherExtensions(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "icon.png"), []byte("not a resource"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReadTextResource(context.Background(), ReadTextResourceParams{ResourcePath: "icon.png"})
+	if err == nil {
+		t.Fatal("ReadTextResource on a non-.tres file, want error")
+	}
+}
+
+func TestReadTextResource_MissingFile(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReadTextResource(context.Background(), ReadTextResourceParams{ResourcePath: "does_not_exist.tres"})
+	if err == nil {
+		t.Fatal("ReadTextResource on a missing file, want error")
 	}
 }

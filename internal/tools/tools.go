@@ -42,6 +42,15 @@ type ProjectSettingsReader interface {
 	ReadProjectSettings(ctx context.Context, params headless.ReadProjectSettingsParams) (*headless.ProjectSettings, error)
 }
 
+// TextResourceReader is the narrow interface the read_text_resource tool
+// depends on. Like ScriptReader, *headless.Client satisfies this without
+// ever invoking Godot — it's scoped to .tres text resources only (see
+// ReadTextResource's doc comment for why .res is out of scope, and for why
+// that means a bare "Resource" name would be misleading here).
+type TextResourceReader interface {
+	ReadTextResource(ctx context.Context, params headless.ReadTextResourceParams) (*headless.TextResourceContents, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -49,6 +58,7 @@ type Deps struct {
 	SceneTree       SceneTreeReader
 	Script          ScriptReader
 	ProjectSettings ProjectSettingsReader
+	TextResource    TextResourceReader
 	Logger          *audit.Logger
 }
 
@@ -58,6 +68,7 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadSceneTree(server, deps)
 	registerReadScript(server, deps)
 	registerReadProjectSettings(server, deps)
+	registerReadTextResource(server, deps)
 }
 
 func registerReadSceneTree(server *mcp.Server, deps Deps) {
@@ -135,5 +146,31 @@ func registerReadProjectSettings(server *mcp.Server, deps Deps) {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
 		}, settings, nil
+	})
+}
+
+func registerReadTextResource(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_text_resource",
+		Description: "Read-only. Returns the raw text of a .tres text resource file under the " +
+			"configured project root (materials, themes, and similar Godot resources saved in " +
+			"text format). Binary .res resources are not supported. Does not modify the " +
+			"resource file or any other project state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReadTextResourceParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		contents, err := deps.TextResource.ReadTextResource(ctx, args)
+		deps.Logger.LogResult("headless", "read_text_resource", args, contents, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(contents, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, contents, nil
 	})
 }

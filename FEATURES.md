@@ -35,11 +35,12 @@ changelog.
       `internal/headless.Client.ReadScript`'s doc comment)
 - [x] Read project settings (`project.godot`, the one per-project config file — same
       direct-read pattern as script contents, no Godot round trip, no path param needed)
-- [ ] Read resources (deliberately split out from "project settings and resources": Godot
-      resources come in two real flavors — `.tres` text resources, readable the same way as
-      scripts, and `.res` binary resources, which would need a real Godot round trip to decode —
-      and cover wildly different content depending on resource type. Needs its own scoping
-      decision before implementation, not bundled in here.)
+- [x] Read resources — tool name `read_text_resource`, deliberately not `read_resource`: scoped to
+      `.tres` text resources only, same direct-read pattern as scripts, no Godot round trip. A
+      bare "resource" name would misleadingly suggest it also covers `.res` binary resources, so
+      it's named for what it actually reads. `.res` is explicitly out of scope: reading
+      them meaningfully would need a real Godot round trip to decode, the same problem
+      `read_scene_tree` already solves for `.tscn` — not something to half-support here)
 - [ ] Scoped node property edit (structured, not free-form script edit)
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)

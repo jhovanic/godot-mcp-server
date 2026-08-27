@@ -163,6 +163,7 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		SceneTree:       headlessClient,
 		Script:          headlessClient,
 		ProjectSettings: headlessClient,
+		TextResource:    headlessClient,
 		Logger:          logger,
 	})
 
