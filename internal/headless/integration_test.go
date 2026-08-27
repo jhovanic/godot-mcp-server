@@ -246,9 +246,12 @@ func writeMinimalPNG(t *testing.T, path string) {
 // Node2D, which carries a real float property in rotation, a real int
 // property in z_index, a real bool property in visible, a real Vector2
 // property in position, and a real Color property in modulate, inherited
-// from CanvasItem) has one child, "Label" (a Label, which carries a real
-// String property in text) — between them, every value type
-// SetNodeProperty supports has a genuine target property to exercise.
+// from CanvasItem) has two children: "Label" (a Label, which carries a real
+// String property in text) and "Cube" (a Node3D, nested here purely to have
+// a real Vector3 property in position to exercise — Godot allows a Node3D
+// under a Node2D structurally even though the transforms are unrelated) —
+// between them, every value type SetNodeProperty supports has a genuine
+// target property to exercise.
 func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
 	t.Helper()
 	const scene = `[gd_scene load_steps=1 format=3]
@@ -256,6 +259,8 @@ func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
 [node name="Main" type="Node2D"]
 
 [node name="Label" type="Label" parent="."]
+
+[node name="Cube" type="Node3D" parent="."]
 `
 	if err := os.WriteFile(filepath.Join(projectDir, "main.tscn"), []byte(scene), 0o644); err != nil {
 		t.Fatalf("writing fixture scene: %v", err)
@@ -433,6 +438,40 @@ func TestSetNodeProperty_RealGodot_Color(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "modulate = Color(0.5, 0.25, 0.75, 1)") {
 		t.Errorf("saved scene missing expected modulate property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_Vector3 targets Node3D's "position", which
+// unlike Node2D's "position" is not itself a stored property: Node3D only
+// exports "transform" (a Basis plus an origin), and "position" is a
+// synthetic accessor that reads/writes transform's origin. Godot's own
+// verify-before-save read-back (target.get("position") after the set)
+// confirms the write took effect the same way it would for any other
+// property, but the .tscn line that actually changes on disk is
+// "transform = Transform3D(...)", with the requested Vector3 as the last
+// three (origin) components — not a "position = Vector3(...)" line.
+func TestSetNodeProperty_RealGodot_Vector3(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Cube",
+		PropertyName: "position",
+		Vector3Value: &Vector3{X: 1.5, Y: -2.5, Z: 3.5},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.5, -2.5, 3.5)") {
+		t.Errorf("saved scene missing expected transform with position as its origin: %s", data)
 	}
 }
 

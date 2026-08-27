@@ -889,6 +889,47 @@ func TestSetNodeProperty_ColorSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_Vector3Success(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Cube",
+			PropertyName:  "position",
+			PreviousValue: "(0, 0, 0)",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Cube",
+			"property_name": "position",
+			"vector3_value": map[string]any{"x": 1.5, "y": -2.5, "z": 3.5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Vector3Value
+	if got == nil || got.X != 1.5 || got.Y != -2.5 || got.Z != 3.5 {
+		t.Fatalf("handler did not pass through vector3_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

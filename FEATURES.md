@@ -51,12 +51,49 @@ changelog.
       project's been opened/imported at least once, so this is a direct read like project
       settings — no Godot round trip. Takes the asset's own path (e.g. `icon.png`), not the
       `.import` file's path, and reads the sibling `<path>.import`
-- [x] Scoped node property edit (structured, not free-form script edit) — tool `set_node_property`:
-      primitives (string/int/float/bool) plus Vector2 and Color for now, richer value types
-      (resource references, NodePath, arrays, ...) are a separate future item. Only registered
-      under `-mode read-write`. Note: writes go through Godot's own scene re-pack/save, so the
-      result is Godot's full current serialization of the scene, not a minimal diff (see
-      `internal/headless.Client.SetNodeProperty`'s doc comment)
+- [x] Scoped node property edit (structured, not free-form script edit) — tool `set_node_property`.
+      Only registered under `-mode read-write`. Note: writes go through Godot's own scene
+      re-pack/save, so the result is Godot's full current serialization of the scene, not a
+      minimal diff (see `internal/headless.Client.SetNodeProperty`'s doc comment). Value types,
+      roughly ordered from simplest to implement to most complex — which also tends to track how
+      commonly each is actually needed on a node property, so this list doubles as a priority
+      order for what to build next:
+    - [x] Primitives: string, int, float, bool (int also covers Godot's int-backed enums, since
+          `Object.set()` takes the raw int either way — no separate enum type needed)
+    - [x] Vector2 (2D position, scale, size, ...)
+    - [x] Vector3 (3D position, scale, ...)
+    - [x] Color (modulate, self_modulate, ...)
+    - [ ] Vector2i / Vector3i — integer-component vectors (grid coordinates, pixel sizes, ...);
+          same fixed-arity pattern as Vector2/Vector3, just int fields instead of float
+    - [ ] Quaternion — 4-float rotation representation, alternative to Euler angles; same
+          fixed-arity pattern as the vectors above, new only in what it's used for
+    - [ ] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision
+          bounds
+    - [ ] Plane — a Vector3 normal plus a float distance
+    - [ ] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)
+    - [ ] Basis — a 3x3 matrix (9 floats); 3D rotation/scale without translation
+    - [ ] Transform2D / Transform3D — the actual stored representation behind a node's own
+          transform. Note from building Vector3 support: Node3D's `position`/`rotation`/`scale`
+          aren't stored properties at all, only `transform` is — those are synthetic accessors
+          onto it (see `TestSetNodeProperty_RealGodot_Vector3`'s doc comment) — so full transform
+          support may end up mattering more in practice than the individual-component vectors
+          already built
+    - [ ] NodePath — addresses another node in the *already-loaded* scene tree (not a filesystem
+          path, so it doesn't reopen the path-validation question the way resource references
+          below do); trivial to implement (wrap a string in `NodePath(...)`) but still worth a
+          deliberate look before adding, per CLAUDE.md's "when in doubt" rule
+    - [ ] Packed arrays (PackedStringArray, PackedInt32Array, PackedFloat32Array,
+          PackedVector2Array, PackedColorArray, ...) — variable-length, and each array type needs
+          its own wire representation; a materially different design from the fixed-arity structs
+          above, not just another field
+    - [ ] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — the biggest
+          item: reopens path validation (the referenced resource has to resolve inside the
+          project root the same way a directly-addressed file does), so this needs its own
+          maintainer conversation before starting, per CLAUDE.md
+    - [ ] Direct Node object references (a property typed to expect a live Node instance, not a
+          NodePath string) — likely stays out of scope entirely; there's no clean way to express
+          "assign this other node" as a scoped, structured tool argument the way everything above
+          can be
 - [ ] Scoped script edit via structured diff (not arbitrary rewrite)
 - [ ] Add / remove node (parameterized)
 
