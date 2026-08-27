@@ -930,6 +930,88 @@ func TestSetNodeProperty_Vector3Success(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_Vector2iSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Sprite",
+			PropertyName:  "frame_coords",
+			PreviousValue: "(0, 0)",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":     "main.tscn",
+			"node_path":      "Sprite",
+			"property_name":  "frame_coords",
+			"vector2i_value": map[string]any{"x": 2, "y": 3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Vector2iValue
+	if got == nil || got.X != 2 || got.Y != 3 {
+		t.Fatalf("handler did not pass through vector2i_value, got %+v", got)
+	}
+}
+
+func TestSetNodeProperty_Vector3iSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "IntGrid",
+			PropertyName:  "grid_position",
+			PreviousValue: "(0, 0, 0)",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":     "main.tscn",
+			"node_path":      "IntGrid",
+			"property_name":  "grid_position",
+			"vector3i_value": map[string]any{"x": 2, "y": 3, "z": 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Vector3iValue
+	if got == nil || got.X != 2 || got.Y != 3 || got.Z != 4 {
+		t.Fatalf("handler did not pass through vector3i_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

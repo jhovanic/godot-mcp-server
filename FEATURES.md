@@ -63,8 +63,13 @@ changelog.
     - [x] Vector2 (2D position, scale, size, ...)
     - [x] Vector3 (3D position, scale, ...)
     - [x] Color (modulate, self_modulate, ...)
-    - [ ] Vector2i / Vector3i — integer-component vectors (grid coordinates, pixel sizes, ...);
-          same fixed-arity pattern as Vector2/Vector3, just int fields instead of float
+    - [x] Vector2i / Vector3i — integer-component vectors (grid coordinates, pixel sizes, ...);
+          same fixed-arity pattern as Vector2/Vector3, just int fields instead of float. Note:
+          no built-in Node class exposes a Vector3i property at all (verified via ClassDB
+          introspection against a real build — the only one in the engine is a Resource property,
+          out of this tool's reach either way), so its real-Godot test target is a custom
+          script-exported property instead, which is arguably the more representative use case
+          for this tool regardless
     - [ ] Quaternion — 4-float rotation representation, alternative to Euler angles; same
           fixed-arity pattern as the vectors above, new only in what it's used for
     - [ ] Rect2 / Rect2i — a position + size pair (two Vector2/Vector2i); UI layout and collision

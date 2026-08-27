@@ -239,31 +239,106 @@ func writeMinimalPNG(t *testing.T, path string) {
 	}
 }
 
-// writeSetNodePropertyFixtureScene writes a small, throwaway .tscn to
-// projectDir — deliberately not testdata/fixture_project/main.tscn, since
-// that fixture is shared with the read-only scene-tree tests and must stay
-// pristine (SetNodeProperty writes the scene file it's given). "Main" (a
-// Node2D, which carries a real float property in rotation, a real int
-// property in z_index, a real bool property in visible, a real Vector2
+// writeSetNodePropertyFixtureScene generates a small, throwaway main.tscn in
+// projectDir via a real Godot invocation — deliberately not
+// testdata/fixture_project/main.tscn, since that fixture is shared with the
+// read-only scene-tree tests and must stay pristine (SetNodeProperty writes
+// the scene file it's given). It's generated rather than hand-authored the
+// way the other fixtures in this file are: attaching a script to a node via
+// hand-written `.tscn` text (a `script=ExtResource("1")` node attribute) is
+// easy to get subtly wrong — an earlier version of this fixture parsed
+// without any error but silently produced a node with no script attached at
+// all (target.get_script() came back null), which only surfaced once
+// Vector3i tried to use the property that script was supposed to export.
+// Building the tree with real Node objects and Node.set_script(), then
+// PackedScene.pack() + ResourceSaver.save() — the same escape hatch already
+// used for the .res fixture in generateResFixture — sidesteps that whole
+// class of mistake by going through Godot's own node construction and
+// script-attachment API instead of hand-written scene-file syntax.
+//
+// "Main" (a Node2D, which carries a real float property in rotation, a real
+// int property in z_index, a real bool property in visible, a real Vector2
 // property in position, and a real Color property in modulate, inherited
-// from CanvasItem) has two children: "Label" (a Label, which carries a real
-// String property in text) and "Cube" (a Node3D, nested here purely to have
-// a real Vector3 property in position to exercise — Godot allows a Node3D
-// under a Node2D structurally even though the transforms are unrelated) —
-// between them, every value type SetNodeProperty supports has a genuine
-// target property to exercise.
-func writeSetNodePropertyFixtureScene(t *testing.T, projectDir string) {
+// from CanvasItem) has four children: "Label" (a Label, which carries a
+// real String property in text), "Cube" (a Node3D, nested here purely to
+// have a real Vector3 property in position to exercise — Godot allows a
+// Node3D under a Node2D structurally even though the transforms are
+// unrelated), "Sprite" (a Sprite2D with hframes/vframes both set to 4,
+// giving frame_coords — a synthetic Vector2i accessor over the single
+// stored "frame" int, see TestSetNodeProperty_RealGodot_Vector2i's doc
+// comment — headroom for a non-trivial value; Sprite2D's own setter rejects
+// any coordinate outside the configured frame grid), and "IntGrid" (a plain
+// Node with the
+// fixture's own vector3i_holder.gd script attached, exporting
+// grid_position) — between them, every value type SetNodeProperty supports
+// has a genuine target property to exercise.
+//
+// Vector3i is the one type with no built-in Node target at all: no built-in
+// Node class exposes a Vector3i property (verified against a real build via
+// ClassDB introspection — the only Vector3i property anywhere in the engine
+// is a Resource property, PlaceholderTexture3D.size, which this tool can't
+// address either way, since it only ever targets Node properties). Testing
+// it against "IntGrid"'s custom-script property instead is also a more
+// realistic stand-in for how this tool actually gets used: against a
+// project's own custom node scripts, not just built-in engine properties.
+func writeSetNodePropertyFixtureScene(t *testing.T, godotBin, projectDir string) {
 	t.Helper()
-	const scene = `[gd_scene load_steps=1 format=3]
+	const script = `extends Node
 
-[node name="Main" type="Node2D"]
-
-[node name="Label" type="Label" parent="."]
-
-[node name="Cube" type="Node3D" parent="."]
+@export var grid_position: Vector3i = Vector3i.ZERO
 `
-	if err := os.WriteFile(filepath.Join(projectDir, "main.tscn"), []byte(scene), 0o644); err != nil {
-		t.Fatalf("writing fixture scene: %v", err)
+	if err := os.WriteFile(filepath.Join(projectDir, "vector3i_holder.gd"), []byte(script), 0o644); err != nil {
+		t.Fatalf("writing fixture script: %v", err)
+	}
+
+	const setupScript = `extends SceneTree
+
+func _init() -> void:
+	var main := Node2D.new()
+	main.name = "Main"
+
+	var label := Label.new()
+	label.name = "Label"
+	main.add_child(label)
+	label.owner = main
+
+	var cube := Node3D.new()
+	cube.name = "Cube"
+	main.add_child(cube)
+	cube.owner = main
+
+	var sprite := Sprite2D.new()
+	sprite.name = "Sprite"
+	sprite.hframes = 4
+	sprite.vframes = 4
+	main.add_child(sprite)
+	sprite.owner = main
+
+	var int_grid := Node.new()
+	int_grid.name = "IntGrid"
+	int_grid.set_script(load("res://vector3i_holder.gd"))
+	main.add_child(int_grid)
+	int_grid.owner = main
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(main)
+	if pack_err != OK:
+		push_error("failed to pack fixture scene: %d" % pack_err)
+	var save_err := ResourceSaver.save(packed, "res://main.tscn")
+	if save_err != OK:
+		push_error("failed to save fixture scene: %d" % save_err)
+	quit()
+`
+	scriptPath := filepath.Join(projectDir, "generate_set_node_property_fixture.gd")
+	if err := os.WriteFile(scriptPath, []byte(setupScript), 0o644); err != nil {
+		t.Fatalf("writing fixture-generation script: %v", err)
+	}
+
+	// #nosec G204 -- test-only, fixed argv, godotBin/projectDir/scriptPath
+	// are all test-controlled, not external input.
+	cmd := exec.Command(godotBin, "--headless", "--path", projectDir, "--script", scriptPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generating set_node_property fixture scene: %v\n%s", err, out)
 	}
 }
 
@@ -275,7 +350,7 @@ func setNodePropertyFixtureClient(t *testing.T) *Client {
 	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	writeSetNodePropertyFixtureScene(t, projectDir)
+	writeSetNodePropertyFixtureScene(t, godotBin, projectDir)
 
 	root, err := validate.NewRoot(projectDir)
 	if err != nil {
@@ -475,6 +550,65 @@ func TestSetNodeProperty_RealGodot_Vector3(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_Vector2i targets Sprite2D's "frame_coords",
+// which — like Node3D's "position" (see TestSetNodeProperty_RealGodot_Vector3
+// above) — is not itself a stored property: Sprite2D only exports "frame"
+// (a single flat int index into the hframes x vframes grid), and
+// frame_coords is a synthetic accessor computed from it
+// (frame = y*hframes + x). The verify-before-save read-back still confirms
+// the write took effect, but the .tscn line that actually changes on disk
+// is "frame = 14" (3*4 + 2, for the fixture's 4x4 grid), not
+// "frame_coords = Vector2i(2, 3)".
+func TestSetNodeProperty_RealGodot_Vector2i(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Sprite",
+		PropertyName:  "frame_coords",
+		Vector2iValue: &Vector2i{X: 2, Y: 3},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "frame = 14") {
+		t.Errorf("saved scene missing expected frame (frame_coords' backing property): %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Vector3i(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "IntGrid",
+		PropertyName:  "grid_position",
+		Vector3iValue: &Vector3i{X: 2, Y: 3, Z: 4},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "grid_position = Vector3i(2, 3, 4)") {
+		t.Errorf("saved scene missing expected grid_position property: %s", data)
+	}
+}
+
 func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	c := setNodePropertyFixtureClient(t)
 
@@ -502,6 +636,40 @@ func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	}
 	if strings.Contains(string(data), "this_property_does_not_exist") {
 		t.Errorf("scene was modified despite the error: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_UnknownProperty_NonRootTarget is a
+// regression test: the operations script used to read target.get_class()
+// for the error message *after* calling root.free(), and freeing root also
+// frees every descendant. When node_path == "" (as in
+// TestSetNodeProperty_RealGodot_UnknownProperty above), target is root
+// itself, and that always happened to survive long enough for the format
+// call — the bug only showed up once a real Vector2i test ended up hitting
+// this same mismatch path against a non-root target (Sprite2D.frame_coords
+// rejected by the engine's own hframes/vframes bounds check), where
+// target.get_class() crashed with "Cannot call method 'get_class' on a
+// previously freed instance." Targeting "Label" here (a child of the scene
+// root) with an unknown property name exercises that non-root path
+// directly.
+func TestSetNodeProperty_RealGodot_UnknownProperty_NonRootTarget(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	strVal := "should not be written"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Label",
+		PropertyName: "this_property_does_not_exist",
+		StringValue:  &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on an unknown property name against a non-root target, want error")
+	}
+	if !strings.Contains(err.Error(), "Label") {
+		t.Errorf("error message should name the target node's class (Label), got: %v", err)
 	}
 }
 

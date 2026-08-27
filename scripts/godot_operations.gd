@@ -137,11 +137,12 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 
 
 ## set_node_property: loads a .tscn file (already-validated res:// path),
-## sets exactly one property (string/int/float/bool/Vector2/Vector3/Color —
-## the caller sends exactly one of string_value/int_value/float_value/
-## bool_value/vector2_value/vector3_value/color_value) on one node addressed
-## by node_path (relative to the scene root; empty string means the root
-## itself), then re-packs and saves the scene.
+## sets exactly one property (string/int/float/bool/Vector2/Vector3/Color/
+## Vector2i/Vector3i — the caller sends exactly one of string_value/
+## int_value/float_value/bool_value/vector2_value/vector3_value/color_value/
+## vector2i_value/vector3i_value) on one node addressed by node_path
+## (relative to the scene root; empty string means the root itself), then
+## re-packs and saves the scene.
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
@@ -184,8 +185,16 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 		var c: Dictionary = params["color_value"]
 		value = Color(float(c.get("r", 0.0)), float(c.get("g", 0.0)), float(c.get("b", 0.0)), float(c.get("a", 1.0)))
 		values_set += 1
+	if params.get("vector2i_value") != null:
+		var v2i: Dictionary = params["vector2i_value"]
+		value = Vector2i(int(v2i.get("x", 0)), int(v2i.get("y", 0)))
+		values_set += 1
+	if params.get("vector3i_value") != null:
+		var v3i: Dictionary = params["vector3i_value"]
+		value = Vector3i(int(v3i.get("x", 0)), int(v3i.get("y", 0)), int(v3i.get("z", 0)))
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)
@@ -209,8 +218,15 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 	target.set(property_name, value)
 	var actual: Variant = target.get(property_name)
 	if actual != value:
+		# target.get_class() must be read before root.free(): freeing root
+		# also frees every descendant (including target, unless target is
+		# root itself), and calling a method on an already-freed instance is
+		# a silent no-op that returns null in GDScript rather than raising —
+		# so capturing it after the free would have quietly corrupted this
+		# error message instead of failing loudly.
+		var target_class := target.get_class()
 		root.free()
-		return _err("set_node_property: setting %s on %s did not take effect (got %s, want %s) — likely an unknown property name or a type Godot couldn't coerce" % [property_name, target.get_class(), actual, value])
+		return _err("set_node_property: setting %s on %s did not take effect (got %s, want %s) — likely an unknown property name or a type Godot couldn't coerce" % [property_name, target_class, actual, value])
 
 	var new_packed := PackedScene.new()
 	var pack_err := new_packed.pack(root)
