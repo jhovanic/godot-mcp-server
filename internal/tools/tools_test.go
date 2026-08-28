@@ -1364,6 +1364,46 @@ func TestSetNodeProperty_Transform3DSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_NodePathSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Remote",
+			PropertyName:  "remote_path",
+			PreviousValue: "",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":      "main.tscn",
+			"node_path":       "Remote",
+			"property_name":   "remote_path",
+			"node_path_value": "../Target",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.NodePathValue == nil || *setter.gotParams.NodePathValue != "../Target" {
+		t.Fatalf("handler did not pass through node_path_value, got %+v", setter.gotParams.NodePathValue)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

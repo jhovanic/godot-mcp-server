@@ -267,10 +267,11 @@ func writeMinimalPNG(t *testing.T, path string) {
 // giving frame_coords — a synthetic Vector2i accessor over the single
 // stored "frame" int, see TestSetNodeProperty_RealGodot_Vector2i's doc
 // comment — headroom for a non-trivial value; Sprite2D's own setter rejects
-// any coordinate outside the configured frame grid), and "IntGrid" (a plain
-// Node with the fixture's own custom_props_holder.gd script attached) —
-// between them, every value type SetNodeProperty supports has a genuine
-// target property to exercise.
+// any coordinate outside the configured frame grid), "IntGrid" (a plain
+// Node with the fixture's own custom_props_holder.gd script attached), and
+// "Remote" (a RemoteTransform2D, which carries a real NodePath property in
+// remote_path) — between them, every value type SetNodeProperty supports
+// has a genuine target property to exercise.
 //
 // Vector3i and Plane are the two types with no built-in Node target at all:
 // no built-in Node class exposes either property type (verified against a
@@ -320,6 +321,11 @@ func _init() -> void:
 	int_grid.set_script(load("res://custom_props_holder.gd"))
 	main.add_child(int_grid)
 	int_grid.owner = main
+
+	var remote := RemoteTransform2D.new()
+	remote.name = "Remote"
+	main.add_child(remote)
+	remote.owner = main
 
 	var packed := PackedScene.new()
 	var pack_err := packed.pack(main)
@@ -690,6 +696,32 @@ func TestSetNodeProperty_RealGodot_Transform2D(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "position = Vector2(10, 20)") || !strings.Contains(string(data), "rotation = 0.5235988") {
 		t.Errorf("saved scene missing expected decomposed position/rotation properties: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_NodePath(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	nodePathVal := "../Target"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Remote",
+		PropertyName:  "remote_path",
+		NodePathValue: &nodePathVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `remote_path = NodePath("../Target")`) {
+		t.Errorf("saved scene missing expected remote_path property: %s", data)
 	}
 }
 

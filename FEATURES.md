@@ -84,10 +84,9 @@ changelog.
           directly (`position`/`rotation`/`scale`/`basis`/`quaternion` are synthetic accessors
           onto it), while Node2D stores `position`/`rotation`/`scale`/`skew` directly (`transform`
           itself is the synthetic accessor)
-    - [ ] NodePath — addresses another node in the *already-loaded* scene tree (not a filesystem
+    - [x] NodePath — addresses another node in the *already-loaded* scene tree (not a filesystem
           path, so it doesn't reopen the path-validation question the way resource references
-          below do); trivial to implement (wrap a string in `NodePath(...)`) but still worth a
-          deliberate look before adding, per CLAUDE.md's "when in doubt" rule
+          below do)
     - [ ] Packed arrays (PackedStringArray, PackedInt32Array, PackedFloat32Array,
           PackedVector2Array, PackedColorArray, ...) — variable-length, and each array type needs
           its own wire representation; a materially different design from the fixed-arity structs

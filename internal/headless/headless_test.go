@@ -1030,6 +1030,51 @@ func TestSetNodeProperty_RejectsTransform3DPlusOtherValue(t *testing.T) {
 	}
 }
 
+// NodePathValue participates in the same "exactly one *_value field" count
+// as the other value fields, proven the same way as Vector2AloneIsValid
+// above.
+
+func TestSetNodeProperty_NodePathAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	nodePathVal := "../Target"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "remote_path",
+		NodePathValue: &nodePathVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone node_path_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone node_path_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsNodePathPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	nodePathVal := "../Target"
+	strVal := "hello"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "remote_path",
+		NodePathValue: &nodePathVal,
+		StringValue:   &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with node_path_value and string_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

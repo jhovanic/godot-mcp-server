@@ -489,18 +489,18 @@ type Color struct {
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
-// BasisValue, Transform2DValue, Transform3DValue must be set — which one
-// determines the GDScript-side type the property is set to (see
+// BasisValue, Transform2DValue, Transform3DValue, NodePathValue must be set
+// — which one determines the GDScript-side type the property is set to (see
 // scripts/godot_operations.gd's _op_set_node_property), since JSON itself
 // doesn't distinguish int from float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
 // Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
-// Transform2D, and Transform3D for now. Godot node properties also include
-// other compound types (resource references, NodePath, arrays, ...);
-// supporting those is a separate, larger design (how does an AI client
-// express a sub-resource reference as tool arguments?) tracked as a future
-// FEATURES.md item, not a variant of this one.
+// Transform2D, Transform3D, and NodePath for now. Godot node properties
+// also include other compound types (resource references, packed arrays,
+// ...); supporting those is a separate, larger design (how does an AI
+// client express a sub-resource reference as tool arguments?) tracked as a
+// future FEATURES.md item, not a variant of this one.
 type SetNodePropertyParams struct {
 	// ScenePath is the .tscn path, relative to the project root. Validated
 	// against Root before use.
@@ -529,6 +529,13 @@ type SetNodePropertyParams struct {
 	BasisValue       *Basis       `json:"basis_value,omitempty" jsonschema:"set property_name to this Basis value (3D rotation/scale without translation, e.g. Node3D.basis); exactly one of the *_value fields must be set"`
 	Transform2DValue *Transform2D `json:"transform2d_value,omitempty" jsonschema:"set property_name to this Transform2D value (e.g. Node2D.transform); exactly one of the *_value fields must be set"`
 	Transform3DValue *Transform3D `json:"transform3d_value,omitempty" jsonschema:"set property_name to this Transform3D value (e.g. Node3D.transform); exactly one of the *_value fields must be set"`
+	// NodePathValue addresses another node in the same, already-loaded scene
+	// tree — e.g. RemoteTransform2D.remote_path — using Godot's own NodePath
+	// syntax (the same syntax as the top-level NodePath field). This is not
+	// a filesystem path and never leaves the instantiated scene tree, so it
+	// doesn't reopen the path-validation question a resource reference
+	// would.
+	NodePathValue *string `json:"node_path_value,omitempty" jsonschema:"set property_name to this NodePath value, addressing another node in the same scene (e.g. \"../Target\"); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -601,13 +608,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.BasisValue != nil,
 		params.Transform2DValue != nil,
 		params.Transform3DValue != nil,
+		params.NodePathValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -640,6 +648,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		BasisValue       *Basis       `json:"basis_value,omitempty"`
 		Transform2DValue *Transform2D `json:"transform2d_value,omitempty"`
 		Transform3DValue *Transform3D `json:"transform3d_value,omitempty"`
+		NodePathValue    *string      `json:"node_path_value,omitempty"`
 	}{
 		Path:             resPath,
 		NodePath:         params.NodePath,
@@ -661,6 +670,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		BasisValue:       params.BasisValue,
 		Transform2DValue: params.Transform2DValue,
 		Transform3DValue: params.Transform3DValue,
+		NodePathValue:    params.NodePathValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}
