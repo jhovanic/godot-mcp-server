@@ -95,7 +95,7 @@ changelog.
               nil-vs-explicitly-empty-array distinction other array types will need too — see
               `SetNodePropertyParams.StringArrayValue`'s doc comment) for the rest to follow
         - [x] PackedInt32Array — same flat-scalar-array pattern, next simplest
-        - [ ] PackedFloat32Array — same flat-scalar-array pattern
+        - [x] PackedFloat32Array — same flat-scalar-array pattern
         - [ ] PackedVector2Array — each element is itself a nested `{x, y}` object, not a bare
               scalar; genuinely common for 2D collision/shape data (`Polygon2D.polygon`,
               `CollisionPolygon2D.polygon`, `Line2D.points`)

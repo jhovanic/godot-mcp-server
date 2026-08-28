@@ -878,6 +878,74 @@ func TestSetNodeProperty_RealGodot_EmptyIntArray(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_RealGodot_FloatArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "Label",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{1.5, 2.5, -3.5},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "tab_stops = PackedFloat32Array(1.5, 2.5, -3.5)") {
+		t.Errorf("saved scene missing expected tab_stops property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyFloatArray mirrors
+// TestSetNodeProperty_RealGodot_EmptyStringArray above (not
+// TestSetNodeProperty_RealGodot_EmptyIntArray's explicit-empty-array
+// variant): Label.tab_stops, like MultiplayerSpawner's _spawnable_scenes,
+// is simply omitted from the saved scene once it's cleared back to empty,
+// rather than staying as an explicit "PackedFloat32Array()" the way
+// SplitContainer.split_offsets does — verified empirically, not assumed
+// from the PackedInt32Array precedent.
+func TestSetNodeProperty_RealGodot_EmptyFloatArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "Label",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{1.5},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "Label",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "tab_stops") {
+		t.Errorf("saved scene still has tab_stops after clearing it to an empty array: %s", data)
+	}
+}
+
 // TestSetNodeProperty_RealGodot_Vector2i targets Sprite2D's "frame_coords",
 // which — like Node3D's "position" (see TestSetNodeProperty_RealGodot_Vector3
 // above) — is not itself a stored property: Sprite2D only exports "frame"

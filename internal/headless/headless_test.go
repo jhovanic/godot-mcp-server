@@ -1206,6 +1206,69 @@ func TestSetNodeProperty_RejectsIntArrayPlusOtherValue(t *testing.T) {
 	}
 }
 
+// FloatArrayValue has the same nil-vs-empty-slice nuance as
+// StringArrayValue/IntArrayValue above, and participates in the same
+// "exactly one *_value field" count as every other value field.
+
+func TestSetNodeProperty_FloatArrayAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{1.5, 2.5, -3.5},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone float_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone float_array_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_EmptyFloatArrayIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with an explicitly empty float_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected an explicitly empty float_array_value as if it were unset: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsFloatArrayPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	floatVal := 1.5
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		PropertyName:    "tab_stops",
+		FloatArrayValue: []float64{1.5},
+		FloatValue:      &floatVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with float_array_value and float_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

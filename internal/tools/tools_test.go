@@ -1486,6 +1486,47 @@ func TestSetNodeProperty_IntArraySuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_FloatArraySuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Label",
+			PropertyName:  "tab_stops",
+			PreviousValue: "[]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":        "main.tscn",
+			"node_path":         "Label",
+			"property_name":     "tab_stops",
+			"float_array_value": []any{1.5, 2.5, -3.5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.FloatArrayValue
+	if len(got) != 3 || got[0] != 1.5 || got[1] != 2.5 || got[2] != -3.5 {
+		t.Fatalf("handler did not pass through float_array_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}
