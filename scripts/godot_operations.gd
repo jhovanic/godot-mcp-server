@@ -58,6 +58,10 @@ func _dispatch(request: Variant) -> Dictionary:
 			return _op_read_binary_resource(params)
 		"set_node_property":
 			return _op_set_node_property(params)
+		"add_node":
+			return _op_add_node(params)
+		"remove_node":
+			return _op_remove_node(params)
 		_:
 			return _err("unknown operation: %s" % operation)
 
@@ -525,6 +529,198 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 		return _err("set_node_property: failed to save %s (error code %d)" % [path, save_err])
 
 	return {"ok": true, "result": {"previous_value": str(previous)}}
+
+
+## add_node: loads a .tscn file (already-validated res:// path), adds one
+## new child node under parent_node_path (relative to the scene root; empty
+## string means the root itself) — either a bare node of a built-in Godot
+## class (type_name) or an instance of another project .tscn
+## (instance_scene_path), exactly one of the two — then re-packs and saves
+## the scene.
+##
+## type_name must be a ClassDB-registered class that is a Node and can be
+## instantiated; a project-defined class_name type is not accepted here —
+## instantiating one always attaches its backing script to the new node, a
+## different trust question deliberately deferred (see FEATURES.md).
+##
+## instance_scene_path is instanced the same way the editor's own "Instance
+## Child Scene" works: the resulting node keeps a live reference to the
+## sub-scene (its scene_file_path is non-empty after instantiate()), which
+## Godot's own pack() serializes as an `instance=ExtResource(...)` node
+## rather than flattening the sub-scene's contents — so only the new node
+## itself needs owner set below, not every descendant inside it.
+##
+## A name collision with an existing sibling under the parent is rejected
+## outright rather than silently renamed (Godot's own add_child() would
+## otherwise auto-uniquify it), and the new node's name is read back after
+## assignment as a backstop against any other silent renaming/sanitization
+## Godot might do — the same "don't let Godot's silent coercion look like
+## success" concern set_node_property already guards against for property
+## writes.
+func _op_add_node(params: Variant) -> Dictionary:
+	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("parent_node_path") or not params.has("name"):
+		return _err("add_node: missing \"path\", \"parent_node_path\" or \"name\" param")
+
+	var path: String = params["path"]
+	var parent_node_path: String = params["parent_node_path"]
+	var name: String = params["name"]
+	if not path.begins_with("res://"):
+		return _err("add_node: path must be a res:// path")
+	if name.is_empty():
+		return _err("add_node: name must not be empty")
+
+	var type_name: Variant = params.get("type_name")
+	var instance_scene_path: Variant = params.get("instance_scene_path")
+	var has_type := type_name != null
+	var has_instance := instance_scene_path != null
+	if has_type == has_instance:
+		return _err("add_node: exactly one of type_name, instance_scene_path must be set")
+
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return _err("add_node: no scene resource at %s" % path)
+
+	var packed: PackedScene = load(path)
+	if packed == null:
+		return _err("add_node: failed to load %s" % path)
+
+	var root: Node = packed.instantiate()
+	if root == null:
+		return _err("add_node: failed to instantiate %s" % path)
+
+	var parent: Node = root
+	if parent_node_path != "":
+		parent = root.get_node_or_null(NodePath(parent_node_path))
+	if parent == null:
+		root.free()
+		return _err("add_node: no node at %s" % parent_node_path)
+
+	if parent.get_node_or_null(NodePath(name)) != null:
+		root.free()
+		return _err("add_node: a node named %s already exists under %s" % [name, parent_node_path])
+
+	var new_node: Node = null
+	if has_type:
+		var type_name_str: String = str(type_name)
+		if not ClassDB.class_exists(type_name_str):
+			root.free()
+			return _err("add_node: unknown class %s" % type_name_str)
+		if not ClassDB.is_parent_class(type_name_str, "Node"):
+			root.free()
+			return _err("add_node: %s is not a Node subclass" % type_name_str)
+		if not ClassDB.can_instantiate(type_name_str):
+			root.free()
+			return _err("add_node: %s cannot be instantiated" % type_name_str)
+		new_node = ClassDB.instantiate(type_name_str)
+	else:
+		var instance_path_str: String = str(instance_scene_path)
+		if not instance_path_str.begins_with("res://"):
+			root.free()
+			return _err("add_node: instance_scene_path must be a res:// path")
+		if not ResourceLoader.exists(instance_path_str, "PackedScene"):
+			root.free()
+			return _err("add_node: no scene resource at %s" % instance_path_str)
+		var sub_packed: PackedScene = load(instance_path_str)
+		if sub_packed == null:
+			root.free()
+			return _err("add_node: failed to load %s" % instance_path_str)
+		new_node = sub_packed.instantiate()
+		if new_node == null:
+			root.free()
+			return _err("add_node: failed to instantiate %s" % instance_path_str)
+
+	new_node.name = name
+	parent.add_child(new_node)
+	new_node.owner = root
+
+	if new_node.name != name:
+		# Godot's own name validation silently sanitizes/renames rather than
+		# erroring on some inputs — same category of silent coercion
+		# set_node_property already guards against for property writes.
+		var actual_name: String = new_node.name
+		root.free()
+		return _err("add_node: node was added as %s instead of the requested %s" % [actual_name, name])
+
+	var actual_type: String = new_node.get_class()
+
+	var new_packed := PackedScene.new()
+	var pack_err := new_packed.pack(root)
+	root.free()
+	if pack_err != OK:
+		return _err("add_node: failed to re-pack scene (error code %d)" % pack_err)
+
+	var save_err := ResourceSaver.save(new_packed, path)
+	if save_err != OK:
+		return _err("add_node: failed to save %s (error code %d)" % [path, save_err])
+
+	return {"ok": true, "result": {"type": actual_type}}
+
+
+## remove_node: loads a .tscn file (already-validated res:// path), removes
+## one node addressed by node_path (relative to the scene root) and its
+## entire subtree, then re-packs and saves the scene. node_path must not be
+## empty and must not resolve to the scene root itself — there's no
+## sensible in-place result for removing a scene's own root node, and it
+## can't be reparented anywhere.
+func _op_remove_node(params: Variant) -> Dictionary:
+	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("node_path"):
+		return _err("remove_node: missing \"path\" or \"node_path\" param")
+
+	var path: String = params["path"]
+	var node_path: String = params["node_path"]
+	if not path.begins_with("res://"):
+		return _err("remove_node: path must be a res:// path")
+	if node_path.is_empty():
+		return _err("remove_node: node_path must not be empty (removing the scene root is refused)")
+
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return _err("remove_node: no scene resource at %s" % path)
+
+	var packed: PackedScene = load(path)
+	if packed == null:
+		return _err("remove_node: failed to load %s" % path)
+
+	var root: Node = packed.instantiate()
+	if root == null:
+		return _err("remove_node: failed to instantiate %s" % path)
+
+	var target: Node = root.get_node_or_null(NodePath(node_path))
+	if target == null:
+		root.free()
+		return _err("remove_node: no node at %s" % node_path)
+	if target == root:
+		root.free()
+		return _err("remove_node: node_path resolves to the scene root, which cannot be removed")
+
+	# target.get_class() and the subtree count must both be read before
+	# root.free() (and before target.free()): freeing frees every
+	# descendant, and calling a method on an already-freed instance is a
+	# silent no-op that returns null rather than raising — see
+	# _op_set_node_property's matching comment above.
+	var removed_type: String = target.get_class()
+	var removed_count: int = _count_subtree(target)
+
+	var parent := target.get_parent()
+	parent.remove_child(target)
+	target.free()
+
+	var new_packed := PackedScene.new()
+	var pack_err := new_packed.pack(root)
+	root.free()
+	if pack_err != OK:
+		return _err("remove_node: failed to re-pack scene (error code %d)" % pack_err)
+
+	var save_err := ResourceSaver.save(new_packed, path)
+	if save_err != OK:
+		return _err("remove_node: failed to save %s (error code %d)" % [path, save_err])
+
+	return {"ok": true, "result": {"removed_type": removed_type, "removed_node_count": removed_count}}
+
+
+func _count_subtree(node: Node) -> int:
+	var count := 1
+	for child in node.get_children():
+		count += _count_subtree(child)
+	return count
 
 
 func _err(message: String) -> Dictionary:

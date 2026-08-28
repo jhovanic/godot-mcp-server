@@ -2865,3 +2865,386 @@ size = Vector2(16, 16)
 		t.Errorf("saved scene missing the new ext_resource for placeholder.tres: %s", data)
 	}
 }
+
+// nodeMutationFixtureClient builds a fresh, temp-dir-backed project (not the
+// shared testdata/fixture_project — these tests mutate the scene) with the
+// same Main(Node) -> World(Node2D) -> Player(CharacterBody2D) chain as
+// testdata/fixture_project/main.tscn, hand-written directly rather than
+// generated via a throwaway Godot script (plain text is enough — Godot
+// itself already loads this exact shape fine, per TestReadSceneTree_RealGodot
+// against the checked-in fixture). Also writes a second, single-node
+// enemy.tscn for the instance_scene_path ("compose a prefab") test case.
+func nodeMutationFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const mainScene = `[gd_scene format=3]
+
+[node name="Main" type="Node"]
+
+[node name="World" type="Node2D" parent="."]
+
+[node name="Player" type="CharacterBody2D" parent="World"]
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tscn"), []byte(mainScene), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const enemyScene = `[gd_scene format=3]
+
+[node name="Enemy" type="CharacterBody2D"]
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "enemy.tscn"), []byte(enemyScene), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestAddNode_RealGodot_BareNodeUnderNonRootParent(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	typeName := "Node2D"
+	result, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "World",
+		Name:           "Obstacle",
+		TypeName:       &typeName,
+	})
+	if err != nil {
+		t.Fatalf("AddNode against a real Godot binary: %v", err)
+	}
+	if result.Type != "Node2D" {
+		t.Errorf("Type = %q, want %q", result.Type, "Node2D")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	// Godot's own re-pack adds a unique_id="..." attribute to every node
+	// line — expected cosmetic noise from the round trip (see
+	// SetNodeProperty's doc comment), so this checks for the substrings
+	// that matter rather than one exact bracket-to-bracket line.
+	if !strings.Contains(string(data), `name="Obstacle" type="Node2D" parent="World"`) {
+		t.Errorf("saved scene missing the new node: %s", data)
+	}
+	if !strings.Contains(string(data), `name="Player" type="CharacterBody2D" parent="World"`) {
+		t.Errorf("saved scene lost the existing Player node: %s", data)
+	}
+}
+
+func TestAddNode_RealGodot_BareNodeUnderSceneRoot(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	typeName := "Timer"
+	result, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "",
+		Name:           "RespawnTimer",
+		TypeName:       &typeName,
+	})
+	if err != nil {
+		t.Fatalf("AddNode against a real Godot binary: %v", err)
+	}
+	if result.Type != "Timer" {
+		t.Errorf("Type = %q, want %q", result.Type, "Timer")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `name="RespawnTimer" type="Timer" parent="."`) {
+		t.Errorf("saved scene missing the new root-level node: %s", data)
+	}
+}
+
+func TestAddNode_RealGodot_RejectsNonNodeTypeName(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Texture2D exists in ClassDB but is not a Node subclass.
+	typeName := "Texture2D"
+	_, err = c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "World",
+		Name:           "NotANode",
+		TypeName:       &typeName,
+	})
+	if err == nil {
+		t.Fatal("AddNode with a non-Node type_name against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestAddNode_RealGodot_RejectsNameCollision(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	typeName := "Node2D"
+	_, err = c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "World",
+		Name:           "Player",
+		TypeName:       &typeName,
+	})
+	if err == nil {
+		t.Fatal("AddNode with a colliding name against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+// TestAddNode_RealGodot_InstancesAnotherScene proves instance_scene_path
+// composes a sub-scene as a live instance reference rather than flattening
+// it: the saved parent scene must gain an ext_resource for enemy.tscn and an
+// `instance=ExtResource(...)` node, not a flattened, ordinary Enemy node.
+func TestAddNode_RealGodot_InstancesAnotherScene(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	instancePath := "enemy.tscn"
+	result, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:         "main.tscn",
+		ParentNodePath:    "World",
+		Name:              "FirstEnemy",
+		InstanceScenePath: &instancePath,
+	})
+	if err != nil {
+		t.Fatalf("AddNode against a real Godot binary: %v", err)
+	}
+	if result.Type != "CharacterBody2D" {
+		t.Errorf("Type = %q, want %q", result.Type, "CharacterBody2D")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `path="res://enemy.tscn"`) {
+		t.Errorf("saved scene missing an ext_resource for enemy.tscn: %s", data)
+	}
+	if !strings.Contains(string(data), `name="FirstEnemy"`) || !strings.Contains(string(data), "instance=ExtResource(") {
+		t.Errorf("saved scene missing the instanced node reference: %s", data)
+	}
+}
+
+func TestRemoveNode_RealGodot_RemovesLeaf(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.RemoveNode(ctx, RemoveNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "World/Player",
+	})
+	if err != nil {
+		t.Fatalf("RemoveNode against a real Godot binary: %v", err)
+	}
+	if result.RemovedType != "CharacterBody2D" {
+		t.Errorf("RemovedType = %q, want %q", result.RemovedType, "CharacterBody2D")
+	}
+	if result.RemovedNodeCount != 1 {
+		t.Errorf("RemovedNodeCount = %d, want %d", result.RemovedNodeCount, 1)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "Player") {
+		t.Errorf("saved scene still contains the removed Player node: %s", data)
+	}
+	if !strings.Contains(string(data), `name="World"`) {
+		t.Errorf("saved scene lost the untouched World node: %s", data)
+	}
+}
+
+func TestRemoveNode_RealGodot_RemovesNonLeafSubtree(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.RemoveNode(ctx, RemoveNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "World",
+	})
+	if err != nil {
+		t.Fatalf("RemoveNode against a real Godot binary: %v", err)
+	}
+	if result.RemovedType != "Node2D" {
+		t.Errorf("RemovedType = %q, want %q", result.RemovedType, "Node2D")
+	}
+	if result.RemovedNodeCount != 2 {
+		t.Errorf("RemovedNodeCount = %d, want %d (World + its child Player)", result.RemovedNodeCount, 2)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "World") || strings.Contains(string(data), "Player") {
+		t.Errorf("saved scene still contains World and/or Player after subtree removal: %s", data)
+	}
+}
+
+func TestRemoveNode_RealGodot_RejectsSceneRoot(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.RemoveNode(ctx, RemoveNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  ".",
+	})
+	if err == nil {
+		t.Fatal("RemoveNode addressing the scene root via \".\" against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestRemoveNode_RealGodot_RejectsNonexistentNode(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.RemoveNode(ctx, RemoveNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "DoesNotExist",
+	})
+	if err == nil {
+		t.Fatal("RemoveNode against a nonexistent node_path, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+// TestAddNode_RealGodot_PreservesSceneUID and
+// TestRemoveNode_RealGodot_PreservesSceneUID prove both new operations
+// restore uid="..." attributes Godot's own re-pack-from-a-live-tree round
+// trip drops, reusing the same fixture shape as
+// TestSetNodeProperty_RealGodot_PreservesSceneUID.
+func TestAddNode_RealGodot_PreservesSceneUID(t *testing.T) {
+	c := sceneUIDFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	typeName := "Node2D"
+	_, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "",
+		Name:           "Extra",
+		TypeName:       &typeName,
+	})
+	if err != nil {
+		t.Fatalf("AddNode against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `uid="uid://dp18m7gwcwhl0"`) {
+		t.Errorf("saved scene lost the gd_scene-level uid: %s", data)
+	}
+	if !strings.Contains(string(data), `uid="uid://b0i8615afj62o"`) {
+		t.Errorf("saved scene lost the ext_resource uid: %s", data)
+	}
+}
+
+func TestRemoveNode_RealGodot_PreservesSceneUID(t *testing.T) {
+	c := sceneUIDFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.RemoveNode(ctx, RemoveNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "Sprite",
+	})
+	if err != nil {
+		t.Fatalf("RemoveNode against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `uid="uid://dp18m7gwcwhl0"`) {
+		t.Errorf("saved scene lost the gd_scene-level uid: %s", data)
+	}
+	if !strings.Contains(string(data), `uid="uid://b0i8615afj62o"`) {
+		t.Errorf("saved scene lost the ext_resource uid: %s", data)
+	}
+}

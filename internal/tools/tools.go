@@ -101,6 +101,19 @@ type NodePropertySetter interface {
 	SetNodeProperty(ctx context.Context, params headless.SetNodePropertyParams) (*headless.SetNodePropertyResult, error)
 }
 
+// NodeAdder is the narrow interface the add_node tool depends on. Same risk
+// tier as NodePropertySetter: a structural scene write, no script content is
+// ever authored (type_name is restricted to built-in engine classes).
+type NodeAdder interface {
+	AddNode(ctx context.Context, params headless.AddNodeParams) (*headless.AddNodeResult, error)
+}
+
+// NodeRemover is the narrow interface the remove_node tool depends on. Same
+// risk tier as NodePropertySetter and NodeAdder.
+type NodeRemover interface {
+	RemoveNode(ctx context.Context, params headless.RemoveNodeParams) (*headless.RemoveNodeResult, error)
+}
+
 // ScriptExportSetter is the narrow interface the set_script_export tool
 // depends on. *headless.Client satisfies it without ever invoking Godot
 // for the edit itself (see SetScriptExport's doc comment) — only for a
@@ -147,6 +160,8 @@ type Deps struct {
 	BinaryResource  BinaryResourceReader
 	ImportSettings  ImportSettingsReader
 	NodeProperty    NodePropertySetter
+	AddNode         NodeAdder
+	RemoveNode      NodeRemover
 	ScriptExport    ScriptExportSetter
 	ScriptSignal    ScriptSignalSetter
 	ScriptIdentity  ScriptIdentitySetter
@@ -174,6 +189,8 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 
 	if deps.Mode == ModeReadWrite || deps.Mode == ModeAdvanced {
 		registerSetNodeProperty(server, deps)
+		registerAddNode(server, deps)
+		registerRemoveNode(server, deps)
 		registerSetScriptExport(server, deps)
 		registerSetScriptSignal(server, deps)
 		registerSetScriptIdentity(server, deps)
@@ -344,6 +361,74 @@ func registerSetNodeProperty(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		result, err := deps.NodeProperty.SetNodeProperty(ctx, args)
 		deps.Logger.LogResult("headless", "set_node_property", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerAddNode(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "add_node",
+		Description: "Write. Adds one new child node to an existing .tscn scene under the " +
+			"configured project root, then saves the scene. Exactly one of type_name/" +
+			"instance_scene_path must be given: type_name creates a bare node of a built-in " +
+			"Godot engine class (e.g. \"Sprite2D\") — a project-defined class_name type is not " +
+			"accepted, since instantiating one would always attach its backing script to the " +
+			"new node; instance_scene_path instances another project .tscn as the new child " +
+			"(composing a prefab/sub-scene, like the editor's \"Instance Child Scene\" — the " +
+			"sub-scene is kept as a live reference, not flattened). name is rejected outright " +
+			"if a sibling with that name already exists under parent_node_path — never " +
+			"silently renamed. This tool never attaches, writes, or references a script " +
+			"directly on the new node. Fails, without modifying the scene, if the scene or " +
+			"parent node doesn't exist, type_name isn't a valid instantiable Node subclass, " +
+			"instance_scene_path doesn't exist, or name collides with an existing sibling. " +
+			"Only ever available when the server was started with -mode read-write or " +
+			"-mode advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.AddNodeParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.AddNode.AddNode(ctx, args)
+		deps.Logger.LogResult("headless", "add_node", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerRemoveNode(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "remove_node",
+		Description: "Write. Removes one node — and its entire subtree, the same as deleting " +
+			"it in the editor — from an existing .tscn scene under the configured project " +
+			"root, then saves the scene. node_path must not be empty: removing the scene's " +
+			"own root node is refused outright. This tool never checks or fixes up other " +
+			"nodes' NodePath-typed properties or signal connections that may have referenced " +
+			"the removed node. Fails, without modifying the scene, if the scene doesn't " +
+			"exist, node_path is empty or resolves to the scene root, or no node exists at " +
+			"node_path. Only ever available when the server was started with -mode " +
+			"read-write or -mode advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.RemoveNodeParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RemoveNode.RemoveNode(ctx, args)
+		deps.Logger.LogResult("headless", "remove_node", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

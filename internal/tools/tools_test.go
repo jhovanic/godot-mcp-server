@@ -98,6 +98,30 @@ func (f *fakeNodePropertySetter) SetNodeProperty(_ context.Context, params headl
 	return f.result, f.err
 }
 
+// fakeNodeAdder is a test double for tools.NodeAdder.
+type fakeNodeAdder struct {
+	gotParams headless.AddNodeParams
+	result    *headless.AddNodeResult
+	err       error
+}
+
+func (f *fakeNodeAdder) AddNode(_ context.Context, params headless.AddNodeParams) (*headless.AddNodeResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeNodeRemover is a test double for tools.NodeRemover.
+type fakeNodeRemover struct {
+	gotParams headless.RemoveNodeParams
+	result    *headless.RemoveNodeResult
+	err       error
+}
+
+func (f *fakeNodeRemover) RemoveNode(_ context.Context, params headless.RemoveNodeParams) (*headless.RemoveNodeResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
 // fakeScriptExportSetter is a test double for tools.ScriptExportSetter.
 type fakeScriptExportSetter struct {
 	gotParams headless.SetScriptExportParams
@@ -730,6 +754,8 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 		BinaryResource:  &fakeBinaryResourceReader{},
 		ImportSettings:  &fakeImportSettingsReader{},
 		NodeProperty:    &fakeNodePropertySetter{},
+		AddNode:         &fakeNodeAdder{},
+		RemoveNode:      &fakeNodeRemover{},
 		ScriptExport:    &fakeScriptExportSetter{},
 		ScriptSignal:    &fakeScriptSignalSetter{},
 		ScriptIdentity:  &fakeScriptIdentitySetter{},
@@ -744,6 +770,8 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 // ModeAdvanced is a superset of ModeReadWrite.
 var readWriteToolNames = map[string]bool{
 	"set_node_property":   true,
+	"add_node":            true,
+	"remove_node":         true,
 	"set_script_export":   true,
 	"set_script_signal":   true,
 	"set_script_identity": true,
@@ -1998,6 +2026,231 @@ func TestSetNodeProperty_Error(t *testing.T) {
 	}
 	if entry.Outcome != audit.OutcomeError {
 		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+func TestAddNode_Success(t *testing.T) {
+	adder := &fakeNodeAdder{
+		result: &headless.AddNodeResult{
+			Path:           "res://main.tscn",
+			ParentNodePath: "World",
+			Name:           "Obstacle",
+			Type:           "Node2D",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.AddNode = adder
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "add_node",
+		Arguments: map[string]any{
+			"scene_path":       "main.tscn",
+			"parent_node_path": "World",
+			"name":             "Obstacle",
+			"type_name":        "Node2D",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if adder.gotParams.ScenePath != "main.tscn" || adder.gotParams.ParentNodePath != "World" || adder.gotParams.Name != "Obstacle" {
+		t.Fatalf("handler did not pass through params, got %+v", adder.gotParams)
+	}
+	if adder.gotParams.TypeName == nil || *adder.gotParams.TypeName != "Node2D" {
+		t.Fatalf("handler did not pass through type_name, got %+v", adder.gotParams.TypeName)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "add_node" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "add_node")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestAddNode_Error(t *testing.T) {
+	wantErr := errors.New("boom: no node at World")
+	adder := &fakeNodeAdder{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.AddNode = adder
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "add_node",
+		Arguments: map[string]any{
+			"scene_path":       "main.tscn",
+			"parent_node_path": "World",
+			"name":             "Obstacle",
+			"type_name":        "Node2D",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestAddNode_NotRegisteredUnderReadOnly confirms add_node is a write tool:
+// never advertised to the MCP client under ModeReadOnly.
+func TestAddNode_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "add_node" {
+			t.Fatal("add_node was advertised under ModeReadOnly")
+		}
+	}
+}
+
+func TestRemoveNode_Success(t *testing.T) {
+	remover := &fakeNodeRemover{
+		result: &headless.RemoveNodeResult{
+			Path:             "res://main.tscn",
+			NodePath:         "World/Player",
+			RemovedType:      "CharacterBody2D",
+			RemovedNodeCount: 1,
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.RemoveNode = remover
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remove_node",
+		Arguments: map[string]any{
+			"scene_path": "main.tscn",
+			"node_path":  "World/Player",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if remover.gotParams.ScenePath != "main.tscn" || remover.gotParams.NodePath != "World/Player" {
+		t.Fatalf("handler did not pass through params, got %+v", remover.gotParams)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "remove_node" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "remove_node")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestRemoveNode_Error(t *testing.T) {
+	wantErr := errors.New("boom: no node at World/Player")
+	remover := &fakeNodeRemover{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.RemoveNode = remover
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "remove_node",
+		Arguments: map[string]any{
+			"scene_path": "main.tscn",
+			"node_path":  "World/Player",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestRemoveNode_NotRegisteredUnderReadOnly confirms remove_node is a write
+// tool: never advertised to the MCP client under ModeReadOnly.
+func TestRemoveNode_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "remove_node" {
+			t.Fatal("remove_node was advertised under ModeReadOnly")
+		}
 	}
 }
 

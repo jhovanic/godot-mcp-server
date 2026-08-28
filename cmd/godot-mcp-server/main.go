@@ -172,6 +172,8 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		BinaryResource:  headlessClient,
 		ImportSettings:  headlessClient,
 		NodeProperty:    headlessClient,
+		AddNode:         headlessClient,
+		RemoveNode:      headlessClient,
 		ScriptExport:    headlessClient,
 		ScriptSignal:    headlessClient,
 		ScriptIdentity:  headlessClient,

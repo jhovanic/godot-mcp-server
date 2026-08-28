@@ -277,7 +277,38 @@ changelog.
           line at zero indentation, so a nested `class`'s own methods are never matched by
           mistake); single-line function signatures only (a wrapped multi-line `func foo(\n  a,\n)
           -> void:` parameter list is refused with a clear error, not guessed at).
-- [ ] Add / remove node (parameterized)
+- [x] Add / remove node (parameterized) — two new tools, `add_node`/`remove_node`, both reusing
+      `set_node_property`'s existing load → mutate live tree → `pack()` → `ResourceSaver.save()`
+      round trip and node-addressing scheme (empty string = scene root, else Godot's own NodePath
+      syntax) rather than inventing a new one. Registered under `-mode read-write` (and, since
+      `-mode advanced` is a strict superset, also under `-mode advanced`) — same risk class as
+      `set_node_property`, since neither tool ever authors or attaches a script.
+    - [x] `add_node` — exactly one of `type_name` (a `ClassDB`-registered built-in engine class
+          that is a Node, e.g. `"Sprite2D"`) or `instance_scene_path` (another project `.tscn`
+          instanced as the new child, composing a prefab/sub-scene the same way the editor's
+          "Instance Child Scene" works — confirmed empirically against a real Godot 4.7.2 binary
+          that the instanced node's own `scene_file_path` is enough to make `pack()` serialize it
+          as an `instance=ExtResource(...)` reference rather than flattening it, so only the new
+          node itself needs `owner` set, not every descendant inside it). A project-defined
+          `class_name` type is deliberately not accepted for `type_name` — it's script-backed, so
+          instantiating one always attaches that script to the new node, a materially different
+          trust question from creating a plain engine node. A name collision with an existing
+          sibling is rejected outright rather than silently auto-renamed (matching this project's
+          "refuse rather than guess" precedent, e.g. `set_function_body`'s ambiguous-duplicate-name
+          refusal), and the new node's actual name is read back after assignment as a backstop
+          against Godot's own silent name sanitization, the same "don't let Godot's silent
+          coercion look like success" concern `set_node_property` already guards against for
+          property writes.
+    - [x] `remove_node` — removes the addressed node and its entire subtree (the same thing that
+          happens if a human deletes it in the editor, not a design choice this tool gets to make);
+          `node_path` must be non-empty and must not resolve to the scene root (checked both by
+          rejecting `""` outright and by comparing the resolved target against the root, so `"."`
+          can't be used to remove the root indirectly). The result reports how many nodes were
+          actually removed (the target plus every descendant) so the caller can see the blast
+          radius after the fact. Neither this tool nor `add_node` checks or fixes up other nodes'
+          NodePath-typed properties or signal connections that may reference the affected node —
+          same "cross-reference correctness is not this tool's job" division of responsibility
+          already documented for `set_script_identity`.
 
 ### TCP runtime tier
 - [ ] Autoload listener script (localhost-only) for live editor/game state
