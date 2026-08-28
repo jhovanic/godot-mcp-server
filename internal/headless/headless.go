@@ -697,6 +697,16 @@ type SetNodePropertyResult struct {
 // the scene in the editor and saved it — it's Godot's own round trip, not a
 // bug in this operation — but it does mean a version-control diff after a
 // write can be noisier than just the one property line.
+//
+// One exception, not treated as acceptable cosmetic noise: resource
+// uid="..." attributes on the [gd_scene ...] header and every
+// [ext_resource ...] line. Godot's pack()-from-a-live-tree round trip
+// drops these unconditionally (confirmed empirically — see scene_uid.go's
+// doc comment — there is no Godot-side fix within this architecture), but
+// unlike load_steps or unique_id, a uid has real semantic weight: Godot
+// 4.4+ uses it to track resource identity independently of file path.
+// preserveSceneUIDs restores whatever uid attributes the scene had before
+// this call, at the text level, after Godot's own save completes.
 func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyParams) (*SetNodePropertyResult, error) {
 	absScenePath, err := c.Root.Resolve(params.ScenePath)
 	if err != nil {
@@ -808,6 +818,20 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		}
 	}
 
+	// originalScene/sceneInfo are captured before the write so any
+	// uid="..." attributes Godot's own resave drops (see scene_uid.go's
+	// doc comment) can be restored afterward — a real correctness concern
+	// distinct from the resave's other, already-accepted cosmetic noise
+	// (load_steps, unique_id, ...).
+	sceneInfo, err := os.Stat(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: %w", err)
+	}
+	originalScene, err := os.ReadFile(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: %w", err)
+	}
+
 	var result struct {
 		PreviousValue string `json:"previous_value"`
 	}
@@ -892,6 +916,16 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		TypedResourceArrayValue: typedResourceResPaths,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
+	}
+
+	updatedScene, err := os.ReadFile(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_node_property: reading saved scene to restore any dropped uid attributes: %w", err)
+	}
+	if patched, changed := preserveSceneUIDs(string(originalScene), string(updatedScene)); changed {
+		if err := os.WriteFile(absScenePath, []byte(patched), sceneInfo.Mode().Perm()); err != nil {
+			return nil, fmt.Errorf("headless: set_node_property: restoring dropped uid attributes: %w", err)
+		}
 	}
 
 	return &SetNodePropertyResult{

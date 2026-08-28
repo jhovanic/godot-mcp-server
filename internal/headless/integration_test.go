@@ -2572,3 +2572,152 @@ func TestSetFunctionBody_RealGodot_RollsBackOnInvalidResult(t *testing.T) {
 		t.Errorf("script was modified despite the parse-failure rollback:\nbefore: %s\nafter: %s", before, after)
 	}
 }
+
+// sceneUIDFixtureClient builds a fresh, temp-dir-backed project with a
+// scene shaped like the bug report that motivated preserveSceneUIDs
+// (scene_uid.go): a [gd_scene] header and one [ext_resource] line each
+// carrying a hand-set uid="..." attribute, matching what a real
+// Godot-4.4+-saved scene looks like. The uid values here are just
+// syntactically valid uid://-shaped strings, not registered in any
+// project-wide UID cache — confirmed during investigation that this
+// doesn't matter: the fix operates at the text level, independent of
+// whether Godot's own loader considers the uid resolvable.
+func sceneUIDFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "alpha.gd"), []byte("extends ColorRect\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const scene = `[gd_scene load_steps=2 format=3 uid="uid://dp18m7gwcwhl0"]
+
+[ext_resource type="Script" uid="uid://b0i8615afj62o" path="res://alpha.gd" id="1_8wgy4"]
+
+[node name="Main" type="ColorRect"]
+script = ExtResource("1_8wgy4")
+color = Color(0.4589408, 0.83825284, 0.31885445, 1)
+
+[node name="Sprite" type="Sprite2D" parent="."]
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tscn"), []byte(scene), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestSetNodeProperty_RealGodot_PreservesSceneUID(t *testing.T) {
+	c := sceneUIDFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	red := Color{R: 1, G: 0, B: 0, A: 1}
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "color",
+		ColorValue:   &red,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `uid="uid://dp18m7gwcwhl0"`) {
+		t.Errorf("saved scene lost the gd_scene-level uid: %s", data)
+	}
+	if !strings.Contains(string(data), `uid="uid://b0i8615afj62o"`) {
+		t.Errorf("saved scene lost the ext_resource uid: %s", data)
+	}
+	if !strings.Contains(string(data), "color = Color(1, 0, 0, 1)") {
+		t.Errorf("saved scene missing the requested color change: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_NoSpuriousUIDOnSceneWithoutOne proves the
+// fix doesn't invent uid attributes on a scene that never had any — the
+// common case, and the shape of every other set_node_property fixture in
+// this test file.
+func TestSetNodeProperty_RealGodot_NoSpuriousUIDOnSceneWithoutOne(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	strVal := "hello"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Label",
+		PropertyName: "text",
+		StringValue:  &strVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "uid=") {
+		t.Errorf("saved scene has a uid= attribute that was never there before: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_PreservesUIDAlongsideNewResourceReference
+// proves the fix composes correctly with resource_value: the pre-existing
+// ext_resource's uid survives even when the same call introduces a
+// brand-new ext_resource (which, having no original counterpart, gets no
+// restored uid of its own — expected, not a regression).
+func TestSetNodeProperty_RealGodot_PreservesUIDAlongsideNewResourceReference(t *testing.T) {
+	c := sceneUIDFixtureClient(t)
+
+	const placeholderTexture = `[gd_resource type="PlaceholderTexture2D" format=3]
+
+[resource]
+size = Vector2(16, 16)
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder.tres"), []byte(placeholderTexture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resVal := "placeholder.tres"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Sprite",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `uid="uid://dp18m7gwcwhl0"`) {
+		t.Errorf("saved scene lost the gd_scene-level uid: %s", data)
+	}
+	if !strings.Contains(string(data), `uid="uid://b0i8615afj62o"`) {
+		t.Errorf("saved scene lost the pre-existing script's ext_resource uid: %s", data)
+	}
+	if !strings.Contains(string(data), `path="res://placeholder.tres"`) {
+		t.Errorf("saved scene missing the new ext_resource for placeholder.tres: %s", data)
+	}
+}
