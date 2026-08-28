@@ -173,6 +173,8 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		ImportSettings:  headlessClient,
 		NodeProperty:    headlessClient,
 		ScriptExport:    headlessClient,
+		ScriptSignal:    headlessClient,
+		ScriptIdentity:  headlessClient,
 		FunctionBody:    headlessClient,
 		Mode:            tools.Mode(cfg.mode),
 		Logger:          logger,

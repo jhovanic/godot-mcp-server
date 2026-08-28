@@ -183,6 +183,14 @@ type SetScriptExportParams struct {
 	// NodePathValue addresses another node in the same, already-loaded
 	// scene tree — this is not a filesystem path.
 	NodePathValue *string `json:"node_path_value,omitempty" jsonschema:"set the @export var's default to this NodePath value (e.g. \"../Target\"); exactly one of the *_value fields must be set"`
+
+	// Onready, if true, declares an `@onready var` instead of an
+	// `@export var` — evaluated once at _ready() time, not exposed in the
+	// editor Inspector. Same name+value shape as an export, just a
+	// different annotation and a different natural insertion point (after
+	// the last existing @onready var, or after the last @export var if
+	// none exists yet).
+	Onready bool `json:"onready,omitempty" jsonschema:"if true, declares this as an @onready var instead of an @export var (evaluated at _ready(), not exposed in the editor Inspector)"`
 }
 
 // SetScriptExportResult confirms a completed export-declaration write.
@@ -267,16 +275,28 @@ func formatVector3Literal(v Vector3) string {
 
 // spliceExportDeclaration adds or modifies a single top-level
 // `@export var <name>: <typeName> = <literal>` declaration in source, a
-// .gd script's full text. Only ever matches (or inserts as) a
-// column-0 declaration — an indented one (e.g. inside a nested `class`
-// block) is a different, intentionally out-of-scope declaration and is
-// never touched, matching Array[NodePath]'s own "top-level only" precedent
-// in SetNodeProperty.
+// .gd script's full text. A thin wrapper over spliceAnnotatedVarDeclaration
+// fixing annotation to "@export" — see that function's doc comment for the
+// shared mechanics.
 func spliceExportDeclaration(source, name, typeName, literal string) (updated, previous, action string, err error) {
-	lines, ending, trailingNewline := splitPreservingLineEnding(source)
-	newLine := fmt.Sprintf("@export var %s: %s = %s", name, typeName, literal)
+	return spliceAnnotatedVarDeclaration(source, "@export", name, typeName, literal)
+}
 
-	declRe := regexp.MustCompile(`^@export\s+var\s+` + regexp.QuoteMeta(name) + `\b`)
+// spliceAnnotatedVarDeclaration adds or modifies a single top-level
+// `<annotation> var <name>: <typeName> = <literal>` declaration in source, a
+// .gd script's full text — annotation is either "@export" or "@onready".
+// Only ever matches (or inserts as) a column-0 declaration — an indented
+// one (e.g. inside a nested `class` block) is a different, intentionally
+// out-of-scope declaration and is never touched, matching Array[NodePath]'s
+// own "top-level only" precedent in SetNodeProperty. A declaration under
+// the *other* annotation with the same name is a distinct declaration and
+// is never touched either.
+func spliceAnnotatedVarDeclaration(source, annotation, name, typeName, literal string) (updated, previous, action string, err error) {
+	lines, ending, trailingNewline := splitPreservingLineEnding(source)
+	newLine := fmt.Sprintf("%s var %s: %s = %s", annotation, name, typeName, literal)
+	quotedAnnotation := regexp.QuoteMeta(annotation)
+
+	declRe := regexp.MustCompile(`^` + quotedAnnotation + `\s+var\s+` + regexp.QuoteMeta(name) + `\b`)
 	for i, line := range lines {
 		if declRe.MatchString(line) {
 			previous = line
@@ -285,23 +305,35 @@ func spliceExportDeclaration(source, name, typeName, literal string) (updated, p
 		}
 	}
 
-	// A legal but unusual split: "@export" alone on one line, "var name"
-	// on the next. Refuse rather than guess which line is "the"
+	// A legal but unusual split: the annotation alone on one line, "var
+	// name" on the next. Refuse rather than guess which line is "the"
 	// declaration.
-	splitRe := regexp.MustCompile(`^@export\s*$`)
+	splitRe := regexp.MustCompile(`^` + quotedAnnotation + `\s*$`)
 	varRe := regexp.MustCompile(`^var\s+` + regexp.QuoteMeta(name) + `\b`)
 	for i, line := range lines {
 		if splitRe.MatchString(line) && i+1 < len(lines) && varRe.MatchString(lines[i+1]) {
-			return "", "", "", fmt.Errorf("declaration for %q is split across a standalone \"@export\" line and a separate \"var\" line, which this operation does not support", name)
+			return "", "", "", fmt.Errorf("declaration for %q is split across a standalone %q line and a separate \"var\" line, which this operation does not support", name, annotation)
 		}
 	}
 
+	lastSameRe := regexp.MustCompile(`^` + quotedAnnotation + `\s+var\s+\w+`)
+	// @onready vars conventionally follow @export vars, so an @onready
+	// insertion falls back to "after the last @export var" before falling
+	// back further to "after extends/class_name" — one extra rung above
+	// @export's own fallback chain.
 	lastExportRe := regexp.MustCompile(`^@export\s+var\s+\w+`)
 	extendsClassRe := regexp.MustCompile(`^(extends|class_name)\b`)
 	insertAfter := -1
 	for i, line := range lines {
-		if lastExportRe.MatchString(line) {
+		if lastSameRe.MatchString(line) {
 			insertAfter = i
+		}
+	}
+	if insertAfter == -1 && annotation == "@onready" {
+		for i, line := range lines {
+			if lastExportRe.MatchString(line) {
+				insertAfter = i
+			}
 		}
 	}
 	if insertAfter == -1 {
@@ -385,8 +417,12 @@ func (c *Client) SetScriptExport(ctx context.Context, params SetScriptExportPara
 		return nil, fmt.Errorf("headless: set_script_export: %w", err)
 	}
 
+	annotation := "@export"
+	if params.Onready {
+		annotation = "@onready"
+	}
 	typeName, literal := renderScriptExportLiteral(params)
-	updated, previous, action, err := spliceExportDeclaration(string(original), params.Name, typeName, literal)
+	updated, previous, action, err := spliceAnnotatedVarDeclaration(string(original), annotation, params.Name, typeName, literal)
 	if err != nil {
 		return nil, fmt.Errorf("headless: set_script_export: %w", err)
 	}
@@ -406,6 +442,347 @@ func (c *Client) SetScriptExport(ctx context.Context, params SetScriptExportPara
 		Name:                params.Name,
 		Action:              action,
 		PreviousDeclaration: previous,
+	}, nil
+}
+
+// SetScriptSignalParams are the parameters for the set_script_signal
+// operation. Unlike an @export/@onready var, a signal has no value — just a
+// name and an optional parameter list — so it does not fit
+// SetScriptExportParams's shape and gets its own tool.
+type SetScriptSignalParams struct {
+	// ScriptPath is the .gd path, relative to the project root. Validated
+	// against Root before use. The script must already exist — this
+	// operation never creates a new script file.
+	ScriptPath string `json:"script_path" jsonschema:"path to an existing .gd script file, relative to the project root"`
+	// Name is the signal's name.
+	Name string `json:"name" jsonschema:"the signal's name, a valid GDScript identifier"`
+	// Parameters is independently optional, following the same
+	// nil-vs-set convention as SetFunctionBodyParams.Parameters: nil
+	// means a bare `signal name` with no parameter list at all; a non-nil
+	// value (including an empty string, rendering `signal name()`) always
+	// fully determines the parameter list — there is no "leave unchanged"
+	// merge here, since a signal has nothing else to merge.
+	Parameters *string `json:"parameters,omitempty" jsonschema:"verbatim GDScript parameter list text, e.g. \"old_value, new_value: int\"; must not contain a newline; nil means a bare 'signal name' with no parameter list; an empty string means an explicit empty parameter list 'signal name()'"`
+}
+
+// SetScriptSignalResult confirms a completed signal-declaration write.
+type SetScriptSignalResult struct {
+	// Path is the script's res://-style path.
+	Path string `json:"path"`
+	// Name is echoed back from the request for confirmation.
+	Name string `json:"name"`
+	// Action is "modified" if a declaration for Name already existed, or
+	// "inserted" if this call added a new one.
+	Action string `json:"action"`
+	// PreviousDeclaration is the full previous declaration line, for audit
+	// purposes. Empty when Action is "inserted".
+	PreviousDeclaration string `json:"previous_declaration,omitempty"`
+}
+
+// spliceSignalDeclaration adds or modifies a single top-level
+// `signal <name>` or `signal <name>(<parameters>)` declaration in source, a
+// .gd script's full text. Only ever matches (or inserts as) a column-0
+// declaration, same top-level-only precedent as spliceAnnotatedVarDeclaration
+// and spliceFunctionBody. Signals conventionally sit near the top of a
+// script, above exports/vars, so the insertion fallback is "after the last
+// existing signal" then "after extends/class_name" then "prepend at top" —
+// no "split across two lines" case exists for a signal the way it does for
+// `@export`/`var (a signal's keyword and name are never legally separable).
+func spliceSignalDeclaration(source, name string, parameters *string) (updated, previous, action string, err error) {
+	if parameters != nil && strings.Contains(*parameters, "\n") {
+		return "", "", "", errors.New("parameters must not contain a newline")
+	}
+
+	lines, ending, trailingNewline := splitPreservingLineEnding(source)
+
+	var newLine string
+	if parameters == nil {
+		newLine = fmt.Sprintf("signal %s", name)
+	} else {
+		newLine = fmt.Sprintf("signal %s(%s)", name, *parameters)
+	}
+
+	declRe := regexp.MustCompile(`^signal\s+` + regexp.QuoteMeta(name) + `\b`)
+	for i, line := range lines {
+		if declRe.MatchString(line) {
+			previous = line
+			lines[i] = newLine
+			return joinWithLineEnding(lines, ending, trailingNewline), previous, "modified", nil
+		}
+	}
+
+	lastSignalRe := regexp.MustCompile(`^signal\s+\w+`)
+	extendsClassRe := regexp.MustCompile(`^(extends|class_name)\b`)
+	insertAfter := -1
+	for i, line := range lines {
+		if lastSignalRe.MatchString(line) {
+			insertAfter = i
+		}
+	}
+	if insertAfter == -1 {
+		for i, line := range lines {
+			if extendsClassRe.MatchString(line) {
+				insertAfter = i
+			}
+		}
+	}
+
+	newLines := make([]string, 0, len(lines)+1)
+	if insertAfter == -1 {
+		newLines = append(newLines, newLine)
+		newLines = append(newLines, lines...)
+	} else {
+		newLines = append(newLines, lines[:insertAfter+1]...)
+		newLines = append(newLines, newLine)
+		newLines = append(newLines, lines[insertAfter+1:]...)
+	}
+
+	return joinWithLineEnding(newLines, ending, trailingNewline), "", "inserted", nil
+}
+
+// SetScriptSignal loads an existing .gd script, adds or modifies one
+// top-level signal declaration, verifies the result still parses (see
+// checkScriptParses), and writes it back — rolling back to the original
+// content if it doesn't.
+func (c *Client) SetScriptSignal(ctx context.Context, params SetScriptSignalParams) (*SetScriptSignalResult, error) {
+	absPath, err := c.Root.Resolve(params.ScriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: %w", err)
+	}
+	if filepath.Ext(absPath) != ".gd" {
+		return nil, fmt.Errorf("headless: set_script_signal: not a .gd file: %s", params.ScriptPath)
+	}
+	if params.Name == "" {
+		return nil, errors.New("headless: set_script_signal: name is required")
+	}
+	if !validGDScriptIdentifier(params.Name) {
+		return nil, fmt.Errorf("headless: set_script_signal: %q is not a valid GDScript identifier", params.Name)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: %w", err)
+	}
+	original, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: %w", err)
+	}
+
+	updated, previous, action, err := spliceSignalDeclaration(string(original), params.Name, params.Parameters)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: %w", err)
+	}
+
+	relPath, err := filepath.Rel(c.Root.String(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: computing project-relative path: %w", err)
+	}
+	resPath := "res://" + filepath.ToSlash(relPath)
+
+	if err := c.writeScriptChecked(ctx, absPath, resPath, original, []byte(updated), info.Mode().Perm()); err != nil {
+		return nil, fmt.Errorf("headless: set_script_signal: %w", err)
+	}
+
+	return &SetScriptSignalResult{
+		Path:                resPath,
+		Name:                params.Name,
+		Action:              action,
+		PreviousDeclaration: previous,
+	}, nil
+}
+
+// SetScriptIdentityParams are the parameters for the set_script_identity
+// operation: a script's own class_name and/or extends declaration. Both are
+// singleton, at-most-one-per-file header lines rather than named
+// declarations, so they share one tool instead of fitting
+// SetScriptExportParams's "name + value" shape. ClassName and Extends are
+// independently optional: nil leaves that one alone, an empty string
+// removes an existing declaration of that kind (no-op if absent), and any
+// other value replaces or inserts it. At least one of the two must be set.
+//
+// Scope boundary: only the two single-declaration-per-line forms are
+// supported — `class_name Foo` alone on its own line, and `extends Bar`
+// alone on its own line. The combined one-line form (`class_name Foo
+// extends Bar`) is refused outright rather than guessed at, matching this
+// file's existing "refuse rather than guess" precedent (see the split
+// @export/var case and set_function_body's multi-line-signature refusal).
+//
+// Changing class_name or extends has a materially bigger blast radius than
+// adding one @export property: other scripts in the project that reference
+// this one by its old class_name, or that assume its old base class, can
+// silently break, and check-only verification (parsing this file alone)
+// cannot catch that. This tool does not attempt to detect or fix those
+// call sites — same division of responsibility as set_function_body's
+// signature edits.
+type SetScriptIdentityParams struct {
+	// ScriptPath is the .gd path, relative to the project root. Validated
+	// against Root before use. The script must already exist — this
+	// operation never creates a new script file.
+	ScriptPath string `json:"script_path" jsonschema:"path to an existing .gd script file, relative to the project root"`
+	// ClassName sets the script's global class_name. Empty string removes
+	// an existing class_name declaration. Nil leaves it unchanged.
+	ClassName *string `json:"class_name,omitempty" jsonschema:"set the script's global class_name to this identifier; empty string removes an existing class_name declaration; nil leaves class_name unchanged; at least one of class_name/extends must be set"`
+	// Extends sets the script's extends target (a class name or a
+	// res://-style script path). Empty string removes an existing extends
+	// declaration. Nil leaves it unchanged. Not identifier-validated,
+	// since a legal target can be a quoted path, not just a bare class
+	// name.
+	Extends *string `json:"extends,omitempty" jsonschema:"set the script's extends target to this class name or res:// script path; empty string removes an existing extends declaration; nil leaves extends unchanged; at least one of class_name/extends must be set"`
+}
+
+// SetScriptIdentityResult confirms a completed class_name/extends write.
+type SetScriptIdentityResult struct {
+	// Path is the script's res://-style path.
+	Path string `json:"path"`
+	// PreviousClassName and PreviousExtends are the previous full
+	// declaration lines, for audit purposes. Empty if that declaration
+	// didn't exist before the call, or wasn't touched by it.
+	PreviousClassName string `json:"previous_class_name,omitempty"`
+	PreviousExtends   string `json:"previous_extends,omitempty"`
+	// ClassNameAction and ExtendsAction are each one of "modified",
+	// "inserted", "removed", or "" (that field of the request was nil —
+	// this call didn't touch that declaration at all).
+	ClassNameAction string `json:"class_name_action,omitempty"`
+	ExtendsAction   string `json:"extends_action,omitempty"`
+}
+
+// spliceHeaderLine finds at most one line in lines matching declRe — a
+// singleton header declaration like class_name or extends. If value is
+// empty, an existing match is removed (a no-op if none exists). Otherwise
+// an existing match is replaced with "keyword value", or a new line
+// "keyword value" is inserted at insertAt if none is found. Returns the
+// resulting lines slice, the previous full line (empty if none existed),
+// and the action taken: "modified", "removed", "inserted", or "" (no-op).
+func spliceHeaderLine(lines []string, declRe *regexp.Regexp, keyword, value string, insertAt int) ([]string, string, string) {
+	for i, line := range lines {
+		if declRe.MatchString(line) {
+			previous := line
+			if value == "" {
+				newLines := make([]string, 0, len(lines)-1)
+				newLines = append(newLines, lines[:i]...)
+				newLines = append(newLines, lines[i+1:]...)
+				return newLines, previous, "removed"
+			}
+			newLines := append([]string(nil), lines...)
+			newLines[i] = fmt.Sprintf("%s %s", keyword, value)
+			return newLines, previous, "modified"
+		}
+	}
+	if value == "" {
+		return lines, "", ""
+	}
+	newLine := fmt.Sprintf("%s %s", keyword, value)
+	newLines := make([]string, 0, len(lines)+1)
+	newLines = append(newLines, lines[:insertAt]...)
+	newLines = append(newLines, newLine)
+	newLines = append(newLines, lines[insertAt:]...)
+	return newLines, "", "inserted"
+}
+
+var (
+	scriptIdentityCombinedLineRe = regexp.MustCompile(`^class_name\s+\S+\s+extends\b`)
+	scriptIdentityClassNameRe    = regexp.MustCompile(`^class_name\s+\w+\s*$`)
+	scriptIdentityExtendsRe      = regexp.MustCompile(`^extends\s+\S.*$`)
+)
+
+// spliceScriptIdentity adds, modifies, or removes source's top-level
+// class_name and/or extends declarations. className/extends nil-vs-set
+// semantics are documented on SetScriptIdentityParams. class_name, when
+// inserted, is placed immediately before an existing extends line if one
+// exists (else at the very top); extends, when inserted, is placed
+// immediately after an existing (or just-inserted) class_name line if one
+// exists (else at the very top) — preserving the conventional class_name
+// then extends file-header order either way.
+func spliceScriptIdentity(source string, className, extends *string) (updated, prevClassName, prevExtends, classNameAction, extendsAction string, err error) {
+	if className == nil && extends == nil {
+		return "", "", "", "", "", errors.New("at least one of class_name or extends must be set")
+	}
+	if extends != nil && strings.Contains(*extends, "\n") {
+		return "", "", "", "", "", errors.New("extends must not contain a newline")
+	}
+
+	lines, ending, trailingNewline := splitPreservingLineEnding(source)
+
+	for _, line := range lines {
+		if scriptIdentityCombinedLineRe.MatchString(line) {
+			return "", "", "", "", "", errors.New("script's class_name and extends are declared on one combined line (\"class_name X extends Y\"), which this operation does not support; split them onto separate lines first")
+		}
+	}
+
+	if className != nil {
+		insertAt := 0
+		for i, line := range lines {
+			if scriptIdentityExtendsRe.MatchString(line) {
+				insertAt = i
+				break
+			}
+		}
+		lines, prevClassName, classNameAction = spliceHeaderLine(lines, scriptIdentityClassNameRe, "class_name", *className, insertAt)
+	}
+
+	if extends != nil {
+		insertAt := 0
+		for i, line := range lines {
+			if scriptIdentityClassNameRe.MatchString(line) {
+				insertAt = i + 1
+				break
+			}
+		}
+		lines, prevExtends, extendsAction = spliceHeaderLine(lines, scriptIdentityExtendsRe, "extends", *extends, insertAt)
+	}
+
+	return joinWithLineEnding(lines, ending, trailingNewline), prevClassName, prevExtends, classNameAction, extendsAction, nil
+}
+
+// SetScriptIdentity loads an existing .gd script, adds, modifies, or
+// removes its class_name and/or extends declaration, verifies the result
+// still parses (see checkScriptParses), and writes it back — rolling back
+// to the original content if it doesn't.
+func (c *Client) SetScriptIdentity(ctx context.Context, params SetScriptIdentityParams) (*SetScriptIdentityResult, error) {
+	absPath, err := c.Root.Resolve(params.ScriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: %w", err)
+	}
+	if filepath.Ext(absPath) != ".gd" {
+		return nil, fmt.Errorf("headless: set_script_identity: not a .gd file: %s", params.ScriptPath)
+	}
+	if params.ClassName == nil && params.Extends == nil {
+		return nil, errors.New("headless: set_script_identity: at least one of class_name or extends must be set")
+	}
+	if params.ClassName != nil && *params.ClassName != "" && !validGDScriptIdentifier(*params.ClassName) {
+		return nil, fmt.Errorf("headless: set_script_identity: %q is not a valid GDScript identifier", *params.ClassName)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: %w", err)
+	}
+	original, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: %w", err)
+	}
+
+	updated, prevClassName, prevExtends, classNameAction, extendsAction, err := spliceScriptIdentity(string(original), params.ClassName, params.Extends)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: %w", err)
+	}
+
+	relPath, err := filepath.Rel(c.Root.String(), absPath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: computing project-relative path: %w", err)
+	}
+	resPath := "res://" + filepath.ToSlash(relPath)
+
+	if err := c.writeScriptChecked(ctx, absPath, resPath, original, []byte(updated), info.Mode().Perm()); err != nil {
+		return nil, fmt.Errorf("headless: set_script_identity: %w", err)
+	}
+
+	return &SetScriptIdentityResult{
+		Path:              resPath,
+		PreviousClassName: prevClassName,
+		PreviousExtends:   prevExtends,
+		ClassNameAction:   classNameAction,
+		ExtendsAction:     extendsAction,
 	}, nil
 }
 

@@ -2573,6 +2573,150 @@ func TestSetFunctionBody_RealGodot_RollsBackOnInvalidResult(t *testing.T) {
 	}
 }
 
+func TestSetScriptExport_RealGodot_OnreadyInsertsNewDeclaration(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	i := int64(5)
+	result, err := c.SetScriptExport(ctx, SetScriptExportParams{
+		ScriptPath: "player.gd",
+		Name:       "target_count",
+		IntValue:   &i,
+		Onready:    true,
+	})
+	if err != nil {
+		t.Fatalf("SetScriptExport with Onready set against a real Godot binary: %v", err)
+	}
+	if result.Action != "inserted" {
+		t.Errorf("Action = %q, want %q", result.Action, "inserted")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "@onready var target_count: int = 5") {
+		t.Errorf("saved script missing the new @onready declaration: %s", data)
+	}
+	if !strings.Contains(string(data), "@export var speed: float = 300.0") {
+		t.Errorf("saved script lost the existing @export declaration: %s", data)
+	}
+}
+
+func TestSetScriptSignal_RealGodot_InsertsAndModifiesSignal(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.SetScriptSignal(ctx, SetScriptSignalParams{
+		ScriptPath: "player.gd",
+		Name:       "died",
+	})
+	if err != nil {
+		t.Fatalf("SetScriptSignal against a real Godot binary: %v", err)
+	}
+	if result.Action != "inserted" {
+		t.Errorf("Action = %q, want %q", result.Action, "inserted")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "signal died\n") {
+		t.Errorf("saved script missing the new bare signal: %s", data)
+	}
+
+	result, err = c.SetScriptSignal(ctx, SetScriptSignalParams{
+		ScriptPath: "player.gd",
+		Name:       "died",
+		Parameters: strPtr("cause: String"),
+	})
+	if err != nil {
+		t.Fatalf("SetScriptSignal (modify) against a real Godot binary: %v", err)
+	}
+	if result.Action != "modified" {
+		t.Errorf("Action = %q, want %q", result.Action, "modified")
+	}
+	if result.PreviousDeclaration != "signal died" {
+		t.Errorf("PreviousDeclaration = %q", result.PreviousDeclaration)
+	}
+
+	data, err = os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "signal died(cause: String)") {
+		t.Errorf("saved script missing the modified signal: %s", data)
+	}
+}
+
+func TestSetScriptIdentity_RealGodot_SetsClassNameAndExtends(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.SetScriptIdentity(ctx, SetScriptIdentityParams{
+		ScriptPath: "player.gd",
+		ClassName:  strPtr("Player"),
+		Extends:    strPtr("Node2D"),
+	})
+	if err != nil {
+		t.Fatalf("SetScriptIdentity against a real Godot binary: %v", err)
+	}
+	if result.ClassNameAction != "inserted" || result.ExtendsAction != "modified" {
+		t.Errorf("ClassNameAction = %q, ExtendsAction = %q, want %q and %q", result.ClassNameAction, result.ExtendsAction, "inserted", "modified")
+	}
+	if result.PreviousExtends != "extends Node" {
+		t.Errorf("PreviousExtends = %q", result.PreviousExtends)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "class_name Player\nextends Node2D\n") {
+		t.Errorf("saved script missing the new class_name/extends header: %s", data)
+	}
+}
+
+// TestSetScriptIdentity_RealGodot_RollsBackOnInvalidExtendsTarget uses an
+// extends target that is syntactically a valid identifier but names no
+// real class, so only the real parser (via checkScriptParses) catches it —
+// exactly the kind of error this tool's own Go-side validation cannot
+// detect ahead of time (see SetScriptIdentityParams's doc comment).
+func TestSetScriptIdentity_RealGodot_RollsBackOnInvalidExtendsTarget(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.SetScriptIdentity(ctx, SetScriptIdentityParams{
+		ScriptPath: "player.gd",
+		Extends:    strPtr("TotallyNonexistentBaseClass12345"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity with a nonexistent extends target against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("script was modified despite the parse-failure rollback:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
 // sceneUIDFixtureClient builds a fresh, temp-dir-backed project with a
 // scene shaped like the bug report that motivated preserveSceneUIDs
 // (scene_uid.go): a [gd_scene] header and one [ext_resource] line each

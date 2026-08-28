@@ -126,6 +126,115 @@ func TestSpliceExportDeclaration_RejectsSplitAnnotationLine(t *testing.T) {
 	}
 }
 
+// These exercise spliceAnnotatedVarDeclaration directly with the "@onready"
+// annotation — spliceExportDeclaration's own tests above already cover the
+// "@export" annotation and the shared mechanics (name-prefix guard, nested
+// class exclusion, CRLF/trailing-newline preservation, split-annotation
+// refusal), so only @onready-specific behavior (its own insertion fallback
+// chain) is re-tested here rather than duplicating every case.
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyInsertsAfterExtendsWhenNoneExist(t *testing.T) {
+	source := "extends Node\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, previous, action, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "Node", `get_node("Target")`)
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q", action, "inserted")
+	}
+	if previous != "" {
+		t.Errorf("previous = %q, want empty", previous)
+	}
+	want := "extends Node\n@onready var target: Node = get_node(\"Target\")\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyInsertsAfterLastExportWhenNoOnreadyExists(t *testing.T) {
+	source := "extends Node\n\n@export var speed: float = 300.0\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, _, action, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "1")
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q", action, "inserted")
+	}
+	want := "extends Node\n\n@export var speed: float = 300.0\n@onready var target: int = 1\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyInsertsAfterLastExistingOnready(t *testing.T) {
+	source := "extends Node\n\n@export var speed: float = 300.0\n@onready var a: int = 1\n@onready var b: int = 2\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, _, action, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "3")
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q", action, "inserted")
+	}
+	want := "extends Node\n\n@export var speed: float = 300.0\n@onready var a: int = 1\n@onready var b: int = 2\n@onready var target: int = 3\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyModifiesExistingInPlace(t *testing.T) {
+	source := "extends Node\n\n@onready var target: int = 1\n"
+	updated, previous, action, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "2")
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if action != "modified" {
+		t.Errorf("action = %q, want %q", action, "modified")
+	}
+	if previous != "@onready var target: int = 1" {
+		t.Errorf("previous = %q, want the old declaration line", previous)
+	}
+	want := "extends Node\n\n@onready var target: int = 2\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyDoesNotMatchExportOfSameName(t *testing.T) {
+	source := "extends Node\n\n@export var target: int = 1\n"
+	updated, _, action, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "2")
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q (an @export var of the same name must not count as a match)", action, "inserted")
+	}
+	if !strings.Contains(updated, "@export var target: int = 1") || !strings.Contains(updated, "@onready var target: int = 2") {
+		t.Errorf("updated missing one of the two same-named declarations: %q", updated)
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyRejectsSplitAnnotationLine(t *testing.T) {
+	source := "extends Node\n\n@onready\nvar target: int = 1\n"
+	_, _, _, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "2")
+	if err == nil {
+		t.Fatal("spliceAnnotatedVarDeclaration on a split @onready/var pair, want error")
+	}
+}
+
+func TestSpliceAnnotatedVarDeclaration_OnreadyPreservesCRLFLineEndings(t *testing.T) {
+	source := "extends Node\r\n\r\nfunc _ready() -> void:\r\n\tpass\r\n"
+	updated, _, _, err := spliceAnnotatedVarDeclaration(source, "@onready", "target", "int", "1")
+	if err != nil {
+		t.Fatalf("spliceAnnotatedVarDeclaration: %v", err)
+	}
+	if strings.Contains(updated, "\n") && !strings.Contains(updated, "\r\n") {
+		t.Fatalf("updated contains a bare \\n despite a CRLF source: %q", updated)
+	}
+	if !strings.Contains(updated, "@onready var target: int = 1\r\n") {
+		t.Errorf("updated missing CRLF-terminated new declaration: %q", updated)
+	}
+}
+
 func TestRenderScriptExportLiteral(t *testing.T) {
 	str := "hello \"world\""
 	i := int64(-5)
@@ -353,5 +462,273 @@ func TestSpliceFunctionBody_IndentsBodyLinesConsistently_PreservesBlankLinesUnin
 	want := "extends Node\n\nfunc foo() -> void:\n\tvar x = 1\n\n\tprint(x)\n"
 	if updated != want {
 		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+// spliceSignalDeclaration backs the set_script_signal tool.
+
+func TestSpliceSignalDeclaration_InsertsBareSignalAfterExtendsWhenNoneExist(t *testing.T) {
+	source := "extends Node\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, previous, action, err := spliceSignalDeclaration(source, "died", nil)
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q", action, "inserted")
+	}
+	if previous != "" {
+		t.Errorf("previous = %q, want empty", previous)
+	}
+	want := "extends Node\nsignal died\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceSignalDeclaration_InsertsWithParametersAfterLastExistingSignal(t *testing.T) {
+	source := "extends Node\n\nsignal died\nsignal spawned\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, _, action, err := spliceSignalDeclaration(source, "damaged", strPtr("amount: int"))
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q", action, "inserted")
+	}
+	want := "extends Node\n\nsignal died\nsignal spawned\nsignal damaged(amount: int)\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceSignalDeclaration_InsertsEmptyParameterList(t *testing.T) {
+	source := "extends Node\n"
+	updated, _, _, err := spliceSignalDeclaration(source, "died", strPtr(""))
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if !strings.Contains(updated, "signal died()") {
+		t.Errorf("updated missing explicit empty parameter list: %q", updated)
+	}
+}
+
+func TestSpliceSignalDeclaration_ModifiesExistingDeclarationInPlace(t *testing.T) {
+	source := "extends Node\n\nsignal damaged(amount: int)\n"
+	updated, previous, action, err := spliceSignalDeclaration(source, "damaged", strPtr("amount: int, source: Node"))
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if action != "modified" {
+		t.Errorf("action = %q, want %q", action, "modified")
+	}
+	if previous != "signal damaged(amount: int)" {
+		t.Errorf("previous = %q, want the old declaration line", previous)
+	}
+	want := "extends Node\n\nsignal damaged(amount: int, source: Node)\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceSignalDeclaration_DoesNotMatchNameThatIsAPrefix(t *testing.T) {
+	source := "extends Node\n\nsignal died_early\n"
+	updated, _, action, err := spliceSignalDeclaration(source, "died", nil)
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q (died_early must not match a lookup for died)", action, "inserted")
+	}
+	if !strings.Contains(updated, "signal died_early") || !strings.Contains(updated, "signal died\n") {
+		t.Errorf("updated missing one of the two distinct signals: %q", updated)
+	}
+}
+
+func TestSpliceSignalDeclaration_IgnoresIndentedSignalInsideNestedClass(t *testing.T) {
+	source := "extends Node\n\nclass Helper:\n\tsignal died\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, _, action, err := spliceSignalDeclaration(source, "died", nil)
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if action != "inserted" {
+		t.Errorf("action = %q, want %q (the indented signal inside Helper must not count as a match)", action, "inserted")
+	}
+	if !strings.Contains(updated, "\tsignal died\n") {
+		t.Errorf("updated lost the nested class's own signal: %q", updated)
+	}
+}
+
+func TestSpliceSignalDeclaration_PreservesCRLFLineEndings(t *testing.T) {
+	source := "extends Node\r\n\r\nfunc _ready() -> void:\r\n\tpass\r\n"
+	updated, _, _, err := spliceSignalDeclaration(source, "died", nil)
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if strings.Contains(updated, "\n") && !strings.Contains(updated, "\r\n") {
+		t.Fatalf("updated contains a bare \\n despite a CRLF source: %q", updated)
+	}
+	if !strings.Contains(updated, "signal died\r\n") {
+		t.Errorf("updated missing CRLF-terminated new declaration: %q", updated)
+	}
+}
+
+func TestSpliceSignalDeclaration_PreservesAbsentTrailingNewline(t *testing.T) {
+	source := "extends Node\n\nsignal died"
+	updated, _, _, err := spliceSignalDeclaration(source, "died", strPtr("cause: String"))
+	if err != nil {
+		t.Fatalf("spliceSignalDeclaration: %v", err)
+	}
+	if strings.HasSuffix(updated, "\n") {
+		t.Errorf("updated gained a trailing newline the source never had: %q", updated)
+	}
+}
+
+// spliceScriptIdentity backs the set_script_identity tool.
+
+func TestSpliceScriptIdentity_InsertsClassNameOnlyAtTop(t *testing.T) {
+	source := "extends Node\n\nfunc _ready() -> void:\n\tpass\n"
+	updated, prevClassName, prevExtends, classAction, extendsAction, err := spliceScriptIdentity(source, strPtr("Player"), nil)
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if classAction != "inserted" || extendsAction != "" {
+		t.Errorf("classAction = %q, extendsAction = %q, want %q and empty", classAction, extendsAction, "inserted")
+	}
+	if prevClassName != "" || prevExtends != "" {
+		t.Errorf("prevClassName/prevExtends should be empty, got %q / %q", prevClassName, prevExtends)
+	}
+	want := "class_name Player\nextends Node\n\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_InsertsExtendsOnlyWhenAbsent(t *testing.T) {
+	source := "func _ready() -> void:\n\tpass\n"
+	updated, _, _, _, extendsAction, err := spliceScriptIdentity(source, nil, strPtr("Node2D"))
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if extendsAction != "inserted" {
+		t.Errorf("extendsAction = %q, want %q", extendsAction, "inserted")
+	}
+	want := "extends Node2D\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_InsertsBothOnEmptyHeaderInConventionalOrder(t *testing.T) {
+	source := "func _ready() -> void:\n\tpass\n"
+	updated, _, _, classAction, extendsAction, err := spliceScriptIdentity(source, strPtr("Player"), strPtr("Node2D"))
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if classAction != "inserted" || extendsAction != "inserted" {
+		t.Errorf("classAction = %q, extendsAction = %q, want both %q", classAction, extendsAction, "inserted")
+	}
+	want := "class_name Player\nextends Node2D\nfunc _ready() -> void:\n\tpass\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_ModifiesExistingClassNameInPlace(t *testing.T) {
+	source := "class_name OldName\nextends Node\n"
+	updated, prevClassName, _, classAction, extendsAction, err := spliceScriptIdentity(source, strPtr("NewName"), nil)
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if classAction != "modified" || extendsAction != "" {
+		t.Errorf("classAction = %q, extendsAction = %q, want %q and empty", classAction, extendsAction, "modified")
+	}
+	if prevClassName != "class_name OldName" {
+		t.Errorf("prevClassName = %q", prevClassName)
+	}
+	want := "class_name NewName\nextends Node\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_ModifiesExistingExtendsInPlace(t *testing.T) {
+	source := "extends Node\n"
+	updated, _, prevExtends, _, extendsAction, err := spliceScriptIdentity(source, nil, strPtr("Node2D"))
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if extendsAction != "modified" {
+		t.Errorf("extendsAction = %q, want %q", extendsAction, "modified")
+	}
+	if prevExtends != "extends Node" {
+		t.Errorf("prevExtends = %q", prevExtends)
+	}
+	want := "extends Node2D\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_RemovesClassNameOnEmptyString(t *testing.T) {
+	source := "class_name Player\nextends Node\n"
+	updated, prevClassName, _, classAction, extendsAction, err := spliceScriptIdentity(source, strPtr(""), nil)
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if classAction != "removed" || extendsAction != "" {
+		t.Errorf("classAction = %q, extendsAction = %q, want %q and empty", classAction, extendsAction, "removed")
+	}
+	if prevClassName != "class_name Player" {
+		t.Errorf("prevClassName = %q", prevClassName)
+	}
+	want := "extends Node\n"
+	if updated != want {
+		t.Errorf("updated =\n%q\nwant\n%q", updated, want)
+	}
+}
+
+func TestSpliceScriptIdentity_RemovingAbsentClassNameIsANoop(t *testing.T) {
+	source := "extends Node\n"
+	updated, prevClassName, _, classAction, _, err := spliceScriptIdentity(source, strPtr(""), nil)
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if classAction != "" {
+		t.Errorf("classAction = %q, want empty (nothing to remove)", classAction)
+	}
+	if prevClassName != "" {
+		t.Errorf("prevClassName = %q, want empty", prevClassName)
+	}
+	if updated != source {
+		t.Errorf("updated =\n%q\nwant unchanged\n%q", updated, source)
+	}
+}
+
+func TestSpliceScriptIdentity_RejectsWhenBothNil(t *testing.T) {
+	source := "extends Node\n"
+	_, _, _, _, _, err := spliceScriptIdentity(source, nil, nil)
+	if err == nil {
+		t.Fatal("spliceScriptIdentity with both class_name and extends nil, want error")
+	}
+}
+
+func TestSpliceScriptIdentity_RejectsCombinedOneLineForm(t *testing.T) {
+	source := "class_name Player extends Node\n"
+	_, _, _, _, _, err := spliceScriptIdentity(source, strPtr("Player2"), nil)
+	if err == nil {
+		t.Fatal("spliceScriptIdentity against a combined \"class_name X extends Y\" line, want error")
+	}
+}
+
+func TestSpliceScriptIdentity_PreservesCRLFLineEndings(t *testing.T) {
+	source := "extends Node\r\n\r\nfunc _ready() -> void:\r\n\tpass\r\n"
+	updated, _, _, _, _, err := spliceScriptIdentity(source, strPtr("Player"), nil)
+	if err != nil {
+		t.Fatalf("spliceScriptIdentity: %v", err)
+	}
+	if strings.Contains(updated, "\n") && !strings.Contains(updated, "\r\n") {
+		t.Fatalf("updated contains a bare \\n despite a CRLF source: %q", updated)
+	}
+	if !strings.Contains(updated, "class_name Player\r\n") {
+		t.Errorf("updated missing CRLF-terminated new declaration: %q", updated)
 	}
 }

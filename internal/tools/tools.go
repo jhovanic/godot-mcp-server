@@ -118,6 +118,24 @@ type FunctionBodySetter interface {
 	SetFunctionBody(ctx context.Context, params headless.SetFunctionBodyParams) (*headless.SetFunctionBodyResult, error)
 }
 
+// ScriptSignalSetter is the narrow interface the set_script_signal tool
+// depends on. Same risk tier and mode gating as ScriptExportSetter — a
+// signal declaration has no executable body, only a name and parameter
+// list.
+type ScriptSignalSetter interface {
+	SetScriptSignal(ctx context.Context, params headless.SetScriptSignalParams) (*headless.SetScriptSignalResult, error)
+}
+
+// ScriptIdentitySetter is the narrow interface the set_script_identity tool
+// depends on. Registered under both ModeReadWrite and ModeAdvanced, same as
+// ScriptExportSetter: despite a bigger cross-file blast radius than a
+// single @export property (see SetScriptIdentityParams's doc comment), it
+// is still a structural, non-executable declaration edit, not the
+// ModeAdvanced tier's "authors executable logic" risk class.
+type ScriptIdentitySetter interface {
+	SetScriptIdentity(ctx context.Context, params headless.SetScriptIdentityParams) (*headless.SetScriptIdentityResult, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -130,6 +148,8 @@ type Deps struct {
 	ImportSettings  ImportSettingsReader
 	NodeProperty    NodePropertySetter
 	ScriptExport    ScriptExportSetter
+	ScriptSignal    ScriptSignalSetter
+	ScriptIdentity  ScriptIdentitySetter
 	FunctionBody    FunctionBodySetter
 	Mode            Mode
 	Logger          *audit.Logger
@@ -155,6 +175,8 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	if deps.Mode == ModeReadWrite || deps.Mode == ModeAdvanced {
 		registerSetNodeProperty(server, deps)
 		registerSetScriptExport(server, deps)
+		registerSetScriptSignal(server, deps)
+		registerSetScriptIdentity(server, deps)
 	}
 	if deps.Mode == ModeAdvanced {
 		registerSetFunctionBody(server, deps)
@@ -345,14 +367,84 @@ func registerSetScriptExport(server *mcp.Server, deps Deps) {
 			"Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis, Transform2D, Transform3D, " +
 			"or NodePath default) in an existing .gd script under the configured project root, " +
 			"then verifies the result still parses and saves it — never touches a function " +
-			"body or any other executable logic. Fails, without modifying the script, if the " +
-			"script doesn't exist, name isn't a valid identifier, or the edited script fails " +
-			"to parse. Only ever available when the server was started with -mode read-write " +
-			"or -mode advanced.",
+			"body or any other executable logic. If onready is true, declares an @onready var " +
+			"instead (evaluated at _ready(), not exposed in the editor Inspector) — same name " +
+			"and value shape, just a different annotation. Fails, without modifying the " +
+			"script, if the script doesn't exist, name isn't a valid identifier, or the edited " +
+			"script fails to parse. Only ever available when the server was started with " +
+			"-mode read-write or -mode advanced.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetScriptExportParams) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
 		result, err := deps.ScriptExport.SetScriptExport(ctx, args)
 		deps.Logger.LogResult("headless", "set_script_export", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerSetScriptSignal(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_script_signal",
+		Description: "Write. Adds or modifies a single top-level `signal <name>` (or " +
+			"`signal <name>(<parameters>)` if parameters is given) declaration in an existing " +
+			".gd script under the configured project root, then verifies the result still " +
+			"parses and saves it — never touches a function body or any other executable " +
+			"logic. parameters is verbatim GDScript parameter list text; omitting it declares " +
+			"a bare signal with no parameter list, an empty string declares an explicit empty " +
+			"parameter list. Fails, without modifying the script, if the script doesn't exist, " +
+			"name isn't a valid identifier, parameters contains a newline, or the edited " +
+			"script fails to parse. Only ever available when the server was started with " +
+			"-mode read-write or -mode advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetScriptSignalParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.ScriptSignal.SetScriptSignal(ctx, args)
+		deps.Logger.LogResult("headless", "set_script_signal", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerSetScriptIdentity(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_script_identity",
+		Description: "Write. Sets, changes, or removes an existing .gd script's class_name " +
+			"and/or extends declaration under the configured project root, then verifies the " +
+			"result still parses and saves it. class_name/extends are each independently " +
+			"optional: omitted leaves that one alone, an empty string removes an existing " +
+			"declaration of that kind, and any other value replaces or inserts it — at least " +
+			"one of the two must be given. Only supports class_name and extends as separate " +
+			"lines; a combined \"class_name X extends Y\" line is refused. WARNING: changing " +
+			"class_name or extends can break other scripts in the project that reference this " +
+			"one by its old class_name or rely on its old base class — this tool only verifies " +
+			"that this file still parses, it never checks other files. Fails, without " +
+			"modifying the script, if the script doesn't exist, both fields are omitted, " +
+			"class_name isn't a valid identifier, the combined one-line form is present, or " +
+			"the edited script fails to parse. Only ever available when the server was " +
+			"started with -mode read-write or -mode advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetScriptIdentityParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.ScriptIdentity.SetScriptIdentity(ctx, args)
+		deps.Logger.LogResult("headless", "set_script_identity", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

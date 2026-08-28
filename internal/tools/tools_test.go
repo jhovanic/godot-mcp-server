@@ -110,6 +110,30 @@ func (f *fakeScriptExportSetter) SetScriptExport(_ context.Context, params headl
 	return f.result, f.err
 }
 
+// fakeScriptSignalSetter is a test double for tools.ScriptSignalSetter.
+type fakeScriptSignalSetter struct {
+	gotParams headless.SetScriptSignalParams
+	result    *headless.SetScriptSignalResult
+	err       error
+}
+
+func (f *fakeScriptSignalSetter) SetScriptSignal(_ context.Context, params headless.SetScriptSignalParams) (*headless.SetScriptSignalResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeScriptIdentitySetter is a test double for tools.ScriptIdentitySetter.
+type fakeScriptIdentitySetter struct {
+	gotParams headless.SetScriptIdentityParams
+	result    *headless.SetScriptIdentityResult
+	err       error
+}
+
+func (f *fakeScriptIdentitySetter) SetScriptIdentity(_ context.Context, params headless.SetScriptIdentityParams) (*headless.SetScriptIdentityResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
 // fakeFunctionBodySetter is a test double for tools.FunctionBodySetter.
 type fakeFunctionBodySetter struct {
 	gotParams headless.SetFunctionBodyParams
@@ -707,6 +731,8 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 		ImportSettings:  &fakeImportSettingsReader{},
 		NodeProperty:    &fakeNodePropertySetter{},
 		ScriptExport:    &fakeScriptExportSetter{},
+		ScriptSignal:    &fakeScriptSignalSetter{},
+		ScriptIdentity:  &fakeScriptIdentitySetter{},
 		FunctionBody:    &fakeFunctionBodySetter{},
 		Mode:            mode,
 		Logger:          logger,
@@ -717,8 +743,10 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 // readToolNames — a strict subset of what ModeAdvanced adds, since
 // ModeAdvanced is a superset of ModeReadWrite.
 var readWriteToolNames = map[string]bool{
-	"set_node_property": true,
-	"set_script_export": true,
+	"set_node_property":   true,
+	"set_script_export":   true,
+	"set_script_signal":   true,
+	"set_script_identity": true,
 }
 
 // TestRegisterAll_ModeGatesWriteTools asserts the write tool set advertised
@@ -2129,6 +2157,233 @@ func TestSetScriptExport_NotRegisteredUnderReadOnly(t *testing.T) {
 	for _, tl := range list.Tools {
 		if tl.Name == "set_script_export" {
 			t.Fatal("set_script_export was advertised under ModeReadOnly")
+		}
+	}
+}
+
+func TestSetScriptSignal_Success(t *testing.T) {
+	setter := &fakeScriptSignalSetter{
+		result: &headless.SetScriptSignalResult{
+			Path:   "res://player.gd",
+			Name:   "died",
+			Action: "inserted",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptSignal = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_signal",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"name":        "died",
+			"parameters":  "cause: String",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.ScriptPath != "player.gd" || setter.gotParams.Name != "died" {
+		t.Fatalf("handler did not pass through params, got %+v", setter.gotParams)
+	}
+	if setter.gotParams.Parameters == nil || *setter.gotParams.Parameters != "cause: String" {
+		t.Fatalf("handler did not pass through parameters, got %+v", setter.gotParams.Parameters)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "set_script_signal" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "set_script_signal")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestSetScriptSignal_Error(t *testing.T) {
+	wantErr := errors.New("boom: no such script")
+	setter := &fakeScriptSignalSetter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptSignal = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_signal",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"name":        "died",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestSetScriptSignal_NotRegisteredUnderReadOnly confirms set_script_signal
+// is a write tool: never advertised to the MCP client under ModeReadOnly.
+func TestSetScriptSignal_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "set_script_signal" {
+			t.Fatal("set_script_signal was advertised under ModeReadOnly")
+		}
+	}
+}
+
+func TestSetScriptIdentity_Success(t *testing.T) {
+	setter := &fakeScriptIdentitySetter{
+		result: &headless.SetScriptIdentityResult{
+			Path:            "res://player.gd",
+			ClassNameAction: "inserted",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptIdentity = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_identity",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"class_name":  "Player",
+			"extends":     "Node2D",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.ScriptPath != "player.gd" {
+		t.Fatalf("handler did not pass through params, got %+v", setter.gotParams)
+	}
+	if setter.gotParams.ClassName == nil || *setter.gotParams.ClassName != "Player" {
+		t.Fatalf("handler did not pass through class_name, got %+v", setter.gotParams.ClassName)
+	}
+	if setter.gotParams.Extends == nil || *setter.gotParams.Extends != "Node2D" {
+		t.Fatalf("handler did not pass through extends, got %+v", setter.gotParams.Extends)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "set_script_identity" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "set_script_identity")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestSetScriptIdentity_Error(t *testing.T) {
+	wantErr := errors.New("boom: no such script")
+	setter := &fakeScriptIdentitySetter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptIdentity = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_identity",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"class_name":  "Player",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestSetScriptIdentity_NotRegisteredUnderReadOnly confirms
+// set_script_identity is a write tool: never advertised to the MCP client
+// under ModeReadOnly.
+func TestSetScriptIdentity_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "set_script_identity" {
+			t.Fatal("set_script_identity was advertised under ModeReadOnly")
 		}
 	}
 }

@@ -254,6 +254,250 @@ func TestSetScriptExport_RollsBackFileOnVerificationInfraFailure(t *testing.T) {
 	}
 }
 
+func TestSetScriptExport_OnreadyAloneIsValidAndRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	i := int64(1)
+	_, err := c.SetScriptExport(context.Background(), SetScriptExportParams{
+		ScriptPath: "player.gd",
+		Name:       "target",
+		IntValue:   &i,
+		Onready:    true,
+	})
+	if err == nil {
+		t.Fatal("SetScriptExport with Onready set and a garbage GodotBin, want an error from the check-only step")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetScriptExport rejected a lone IntValue with Onready set as if zero/multiple values were set: %v", err)
+	}
+
+	data, readErr := os.ReadFile(filepath.Join(dir, "player.gd"))
+	if readErr != nil {
+		t.Fatalf("reading fixture after rollback: %v", readErr)
+	}
+	if string(data) != scriptEditFixtureSource {
+		t.Errorf("file was not rolled back to its original content: %q", data)
+	}
+}
+
+func TestSetScriptSignal_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "../outside.gd",
+		Name:       "died",
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("SetScriptSignal error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestSetScriptSignal_RejectsNonGDScriptExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a script"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "notes.txt",
+		Name:       "died",
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal on a non-.gd file, want error")
+	}
+}
+
+func TestSetScriptSignal_RejectsMissingFile(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "does_not_exist.gd",
+		Name:       "died",
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal on a nonexistent script, want error")
+	}
+}
+
+func TestSetScriptSignal_RejectsEmptyName(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "player.gd",
+		Name:       "",
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal with an empty name, want error")
+	}
+}
+
+func TestSetScriptSignal_RejectsInvalidIdentifierName(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	for _, name := range []string{"123abc", "has space", "has-dash", "has.dot"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+				ScriptPath: "player.gd",
+				Name:       name,
+			})
+			if err == nil {
+				t.Fatalf("SetScriptSignal with invalid identifier %q, want error", name)
+			}
+		})
+	}
+}
+
+func TestSetScriptSignal_RejectsParametersContainingNewline(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "player.gd",
+		Name:       "died",
+		Parameters: strPtr("a: int,\nb: int"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal with a newline embedded in parameters, want error")
+	}
+}
+
+func TestSetScriptSignal_AloneIsValidAndRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptSignal(context.Background(), SetScriptSignalParams{
+		ScriptPath: "player.gd",
+		Name:       "died",
+		Parameters: strPtr("cause: String"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptSignal against a garbage GodotBin, want an error from the check-only step")
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("SetScriptSignal error = %v, want it to mention the rollback", err)
+	}
+
+	data, readErr := os.ReadFile(filepath.Join(dir, "player.gd"))
+	if readErr != nil {
+		t.Fatalf("reading fixture after rollback: %v", readErr)
+	}
+	if string(data) != scriptEditFixtureSource {
+		t.Errorf("file was not rolled back to its original content: %q", data)
+	}
+}
+
+func TestSetScriptIdentity_RejectsOutOfRootPath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+		ScriptPath: "../outside.gd",
+		ClassName:  strPtr("Player"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity with a traversal path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("SetScriptIdentity error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestSetScriptIdentity_RejectsNonGDScriptExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a script"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+		ScriptPath: "notes.txt",
+		ClassName:  strPtr("Player"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity on a non-.gd file, want error")
+	}
+}
+
+func TestSetScriptIdentity_RejectsMissingFile(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+		ScriptPath: "does_not_exist.gd",
+		ClassName:  strPtr("Player"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity on a nonexistent script, want error")
+	}
+}
+
+func TestSetScriptIdentity_RejectsBothClassNameAndExtendsNil(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+		ScriptPath: "player.gd",
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity with both class_name and extends nil, want error")
+	}
+}
+
+func TestSetScriptIdentity_RejectsInvalidClassNameIdentifier(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	for _, name := range []string{"123abc", "has space", "has-dash"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+				ScriptPath: "player.gd",
+				ClassName:  strPtr(name),
+			})
+			if err == nil {
+				t.Fatalf("SetScriptIdentity with invalid class_name identifier %q, want error", name)
+			}
+		})
+	}
+}
+
+func TestSetScriptIdentity_AloneIsValidAndRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	writeScriptEditFixture(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetScriptIdentity(context.Background(), SetScriptIdentityParams{
+		ScriptPath: "player.gd",
+		ClassName:  strPtr("Player"),
+		Extends:    strPtr("Node2D"),
+	})
+	if err == nil {
+		t.Fatal("SetScriptIdentity against a garbage GodotBin, want an error from the check-only step")
+	}
+	if !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("SetScriptIdentity error = %v, want it to mention the rollback", err)
+	}
+
+	data, readErr := os.ReadFile(filepath.Join(dir, "player.gd"))
+	if readErr != nil {
+		t.Fatalf("reading fixture after rollback: %v", readErr)
+	}
+	if string(data) != scriptEditFixtureSource {
+		t.Errorf("file was not rolled back to its original content: %q", data)
+	}
+}
+
 func TestSetFunctionBody_RejectsOutOfRootPath(t *testing.T) {
 	c := newDirectReadTestClient(t, t.TempDir())
 

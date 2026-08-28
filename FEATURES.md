@@ -234,17 +234,25 @@ changelog.
         - [ ] Packed/typed arrays and Resource-typed export defaults — deferred: an array or
               Resource default needs its own literal-rendering design (e.g. a `preload()` call for
               a Resource default), not just another scalar case
-        - [ ] Other declaration kinds — deliberately out of v1, each for its own reason, not
-              bundled into `set_script_export` just because it's also "a line near the top of a
-              script":
-            - [ ] `signal` declarations — a different statement shape entirely (no type/default
-                  pair), would need its own params shape, not a variant of this tool's
-            - [ ] `class_name` / `extends` edits — change the script's identity/inheritance, a much
-                  bigger blast radius than adding one property (every file referencing this script
-                  by class name, or relying on its base class, is affected)
-            - [ ] `@onready var` declarations — same declaration shape as `@export var` but a
-                  different annotation with different semantics (evaluated at `_ready()`, not
-                  editor-exposed); revisit once `@export var` is proven out
+        - [x] Other declaration kinds — each shipped as its own tool/params shape rather than
+              bundled into `set_script_export`'s own struct, per the structural reasons below:
+            - [x] `@onready var` declarations — same name+value shape as `@export var`, just a
+                  different annotation (evaluated at `_ready()`, not editor-exposed), so added as
+                  an `onready` flag on `set_script_export` itself rather than a new tool. Insertion
+                  fallback: after the last existing `@onready var`, else after the last
+                  `@export var`, else after `extends`/`class_name`, else top of file.
+            - [x] `signal` declarations — no type/default pair, so a new tool,
+                  `set_script_signal` (`signal <name>` or `signal <name>(<parameters>)`), same
+                  risk tier and `-mode read-write` gating as `set_script_export`.
+            - [x] `class_name` / `extends` edits — a new tool, `set_script_identity`
+                  (`class_name`/`extends` independently optional; empty string removes an
+                  existing declaration). Still registered under `-mode read-write`, not
+                  `-mode advanced`: a structural, non-executable edit, the same risk class as
+                  `set_node_property`/`set_script_export`, even though the blast radius (other
+                  files referencing the old class_name/extends can silently break, uncaught by
+                  `--check-only`) is bigger than a single `@export` property. Only the
+                  one-declaration-per-line forms are supported; the combined
+                  `class_name X extends Y` one-liner is refused rather than guessed at.
     - [x] `set_function_body` — replaces an existing top-level function's body (and, selectively,
           its parameters and/or return type — `nil` on either leaves that part of the existing
           signature unchanged) with caller-supplied GDScript source text, or inserts a new
