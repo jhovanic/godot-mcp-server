@@ -490,20 +490,21 @@ type Color struct {
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
 // BasisValue, Transform2DValue, Transform3DValue, NodePathValue,
-// StringArrayValue, IntArrayValue, FloatArrayValue must be set — which one
-// determines the GDScript-side type the property is set to (see
-// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
-// doesn't distinguish int from float the way Go and GDScript both do.
+// StringArrayValue, IntArrayValue, FloatArrayValue, Vector2ArrayValue must
+// be set — which one determines the GDScript-side type the property is set
+// to (see scripts/godot_operations.gd's _op_set_node_property), since JSON
+// itself doesn't distinguish int from float the way Go and GDScript both
+// do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
 // Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
 // Transform2D, Transform3D, NodePath, PackedStringArray, PackedInt32Array,
-// and PackedFloat32Array for now. Godot node properties also include other
-// compound types (resource references, other packed array element types —
-// Vector2, Vector3, Color, ...); supporting those is a separate, larger
-// design (how does an AI client express a sub-resource reference as tool
-// arguments?) tracked as a future FEATURES.md item, not a variant of this
-// one.
+// PackedFloat32Array, and PackedVector2Array for now. Godot node properties
+// also include other compound types (resource references, other packed
+// array element types — Vector3, Color, ...); supporting those is a
+// separate, larger design (how does an AI client express a sub-resource
+// reference as tool arguments?) tracked as a future FEATURES.md item, not a
+// variant of this one.
 type SetNodePropertyParams struct {
 	// ScenePath is the .tscn path, relative to the project root. Validated
 	// against Root before use.
@@ -562,6 +563,10 @@ type SetNodePropertyParams struct {
 	// StringArrayValue/IntArrayValue above, and for the same reason uses
 	// "omitzero" rather than "omitempty" on its json tag.
 	FloatArrayValue []float64 `json:"float_array_value,omitzero" jsonschema:"set property_name to this PackedFloat32Array value (e.g. Label.tab_stops); exactly one of the *_value fields must be set"`
+	// Vector2ArrayValue has the same nil-vs-explicitly-empty distinction as
+	// the other packed array fields above, and for the same reason uses
+	// "omitzero" rather than "omitempty" on its json tag.
+	Vector2ArrayValue []Vector2 `json:"vector2_array_value,omitzero" jsonschema:"set property_name to this PackedVector2Array value (e.g. Polygon2D.polygon, CollisionPolygon2D.polygon); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -638,13 +643,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.StringArrayValue != nil,
 		params.IntArrayValue != nil,
 		params.FloatArrayValue != nil,
+		params.Vector2ArrayValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -681,34 +687,36 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		// omitzero, not omitempty — see StringArrayValue's doc comment on
 		// SetNodePropertyParams for why: it preserves the nil-vs-empty-slice
 		// distinction across this marshal, which omitempty would collapse.
-		StringArrayValue []string  `json:"string_array_value,omitzero"`
-		IntArrayValue    []int64   `json:"int_array_value,omitzero"`
-		FloatArrayValue  []float64 `json:"float_array_value,omitzero"`
+		StringArrayValue  []string  `json:"string_array_value,omitzero"`
+		IntArrayValue     []int64   `json:"int_array_value,omitzero"`
+		FloatArrayValue   []float64 `json:"float_array_value,omitzero"`
+		Vector2ArrayValue []Vector2 `json:"vector2_array_value,omitzero"`
 	}{
-		Path:             resPath,
-		NodePath:         params.NodePath,
-		PropertyName:     params.PropertyName,
-		StringValue:      params.StringValue,
-		IntValue:         params.IntValue,
-		FloatValue:       params.FloatValue,
-		BoolValue:        params.BoolValue,
-		Vector2Value:     params.Vector2Value,
-		Vector3Value:     params.Vector3Value,
-		ColorValue:       params.ColorValue,
-		Vector2iValue:    params.Vector2iValue,
-		Vector3iValue:    params.Vector3iValue,
-		QuaternionValue:  params.QuaternionValue,
-		Rect2Value:       params.Rect2Value,
-		Rect2iValue:      params.Rect2iValue,
-		PlaneValue:       params.PlaneValue,
-		AABBValue:        params.AABBValue,
-		BasisValue:       params.BasisValue,
-		Transform2DValue: params.Transform2DValue,
-		Transform3DValue: params.Transform3DValue,
-		NodePathValue:    params.NodePathValue,
-		StringArrayValue: params.StringArrayValue,
-		IntArrayValue:    params.IntArrayValue,
-		FloatArrayValue:  params.FloatArrayValue,
+		Path:              resPath,
+		NodePath:          params.NodePath,
+		PropertyName:      params.PropertyName,
+		StringValue:       params.StringValue,
+		IntValue:          params.IntValue,
+		FloatValue:        params.FloatValue,
+		BoolValue:         params.BoolValue,
+		Vector2Value:      params.Vector2Value,
+		Vector3Value:      params.Vector3Value,
+		ColorValue:        params.ColorValue,
+		Vector2iValue:     params.Vector2iValue,
+		Vector3iValue:     params.Vector3iValue,
+		QuaternionValue:   params.QuaternionValue,
+		Rect2Value:        params.Rect2Value,
+		Rect2iValue:       params.Rect2iValue,
+		PlaneValue:        params.PlaneValue,
+		AABBValue:         params.AABBValue,
+		BasisValue:        params.BasisValue,
+		Transform2DValue:  params.Transform2DValue,
+		Transform3DValue:  params.Transform3DValue,
+		NodePathValue:     params.NodePathValue,
+		StringArrayValue:  params.StringArrayValue,
+		IntArrayValue:     params.IntArrayValue,
+		FloatArrayValue:   params.FloatArrayValue,
+		Vector2ArrayValue: params.Vector2ArrayValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

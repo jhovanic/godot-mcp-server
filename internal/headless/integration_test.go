@@ -273,9 +273,11 @@ func writeMinimalPNG(t *testing.T, path string) {
 // remote_path), "Spawner" (a MultiplayerSpawner, which carries a real
 // PackedStringArray property in _spawnable_scenes — underscore-prefixed,
 // but genuinely a public ClassDB property, not a private implementation
-// detail), and "Split" (a SplitContainer, which carries a real
-// PackedInt32Array property in split_offsets) — between them, every value
-// type SetNodeProperty supports has a genuine target property to exercise.
+// detail), "Split" (a SplitContainer, which carries a real
+// PackedInt32Array property in split_offsets), and "Poly" (a
+// CollisionPolygon2D, which carries a real PackedVector2Array property in
+// polygon) — between them, every value type SetNodeProperty supports has a
+// genuine target property to exercise.
 //
 // Vector3i and Plane are the two types with no built-in Node target at all:
 // no built-in Node class exposes either property type (verified against a
@@ -340,6 +342,11 @@ func _init() -> void:
 	split.name = "Split"
 	main.add_child(split)
 	split.owner = main
+
+	var poly := CollisionPolygon2D.new()
+	poly.name = "Poly"
+	main.add_child(poly)
+	poly.owner = main
 
 	var packed := PackedScene.new()
 	var pack_err := packed.pack(main)
@@ -943,6 +950,75 @@ func TestSetNodeProperty_RealGodot_EmptyFloatArray(t *testing.T) {
 	}
 	if strings.Contains(string(data), "tab_stops") {
 		t.Errorf("saved scene still has tab_stops after clearing it to an empty array: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_Vector2Array(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Poly",
+		PropertyName: "polygon",
+		Vector2ArrayValue: []Vector2{
+			{X: 1.5, Y: 2.5},
+			{X: -3, Y: 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "polygon = PackedVector2Array(1.5, 2.5, -3, 4)") {
+		t.Errorf("saved scene missing expected polygon property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyVector2Array mirrors
+// TestSetNodeProperty_RealGodot_EmptyStringArray/EmptyFloatArray above:
+// CollisionPolygon2D.polygon is omitted from the saved scene once cleared
+// back to empty, rather than staying as an explicit
+// "PackedVector2Array()" the way SplitContainer.split_offsets does —
+// verified empirically.
+func TestSetNodeProperty_RealGodot_EmptyVector2Array(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Poly",
+		PropertyName:      "polygon",
+		Vector2ArrayValue: []Vector2{{X: 1, Y: 2}},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Poly",
+		PropertyName:      "polygon",
+		Vector2ArrayValue: []Vector2{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "polygon") {
+		t.Errorf("saved scene still has polygon after clearing it to an empty array: %s", data)
 	}
 }
 

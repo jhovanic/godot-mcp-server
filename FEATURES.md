@@ -96,7 +96,7 @@ changelog.
               `SetNodePropertyParams.StringArrayValue`'s doc comment) for the rest to follow
         - [x] PackedInt32Array — same flat-scalar-array pattern, next simplest
         - [x] PackedFloat32Array — same flat-scalar-array pattern
-        - [ ] PackedVector2Array — each element is itself a nested `{x, y}` object, not a bare
+        - [x] PackedVector2Array — each element is itself a nested `{x, y}` object, not a bare
               scalar; genuinely common for 2D collision/shape data (`Polygon2D.polygon`,
               `CollisionPolygon2D.polygon`, `Line2D.points`)
         - [ ] PackedColorArray — nested `{r, g, b, a}` elements
