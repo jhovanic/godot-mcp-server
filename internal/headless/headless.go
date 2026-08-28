@@ -590,6 +590,18 @@ type SetNodePropertyParams struct {
 	// as the packed array fields above, and for the same reason uses
 	// "omitzero" rather than "omitempty" on its json tag.
 	NodePathArrayValue []string `json:"node_path_array_value,omitzero" jsonschema:"set property_name to this Array[NodePath] value, each element addressing another node in the same scene; exactly one of the *_value fields must be set"`
+	// ResourceValue is a project-relative path to an existing resource file
+	// (e.g. a .png, .tres, or .res), validated against Root exactly like
+	// ScenePath before use, then loaded (via Godot's own load()) and
+	// assigned as the property's value — e.g. a Texture2D for
+	// Sprite2D.texture, a Material for MeshInstance3D.material_override.
+	// This is a reference to an existing file, never a request to construct
+	// a new resource from inline parameters. property_name "script" (or any
+	// other Script-typed property) is refused unconditionally regardless of
+	// this field: assigning a Script is code execution by another name, not
+	// a data write, and is out of scope for every value type in this
+	// struct, not just this one.
+	ResourceValue *string `json:"resource_value,omitempty" jsonschema:"set property_name to this Resource value, referencing an existing project resource file by path (e.g. a Texture2D from a .png or .tres); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -642,6 +654,15 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 	if params.PropertyName == "" {
 		return nil, errors.New("headless: set_node_property: property_name is required")
 	}
+	// Refusing "script" here is a property_name check, not a resource_value
+	// check: assigning a Script to a node is code execution by another
+	// name, not a data write, regardless of which *_value field the caller
+	// used to try it. This must be caught before any Godot process is
+	// spawned, not left to whatever _op_set_node_property happens to do
+	// with the value — see CLAUDE.md's first hard constraint.
+	if params.PropertyName == "script" {
+		return nil, errors.New("headless: set_node_property: refusing to set \"script\": assigning a Script is not permitted")
+	}
 
 	valuesSet := 0
 	for _, set := range []bool{
@@ -670,13 +691,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.ColorArrayValue != nil,
 		params.Vector3ArrayValue != nil,
 		params.NodePathArrayValue != nil,
+		params.ResourceValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value, resource_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -684,6 +706,24 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		return nil, fmt.Errorf("headless: set_node_property: computing project-relative path: %w", err)
 	}
 	resPath := "res://" + filepath.ToSlash(relScenePath)
+
+	// ResourceValue is a project-relative path, resolved and converted to a
+	// res:// path exactly like ScenePath — same Root.Resolve trust
+	// boundary, so a traversal attempt here fails the same way a traversal
+	// ScenePath does.
+	var resourceResPath *string
+	if params.ResourceValue != nil {
+		absResourcePath, err := c.Root.Resolve(*params.ResourceValue)
+		if err != nil {
+			return nil, fmt.Errorf("headless: set_node_property: %w", err)
+		}
+		relResourcePath, err := filepath.Rel(c.Root.String(), absResourcePath)
+		if err != nil {
+			return nil, fmt.Errorf("headless: set_node_property: computing project-relative resource path: %w", err)
+		}
+		rp := "res://" + filepath.ToSlash(relResourcePath)
+		resourceResPath = &rp
+	}
 
 	var result struct {
 		PreviousValue string `json:"previous_value"`
@@ -710,6 +750,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Transform2DValue *Transform2D `json:"transform2d_value,omitempty"`
 		Transform3DValue *Transform3D `json:"transform3d_value,omitempty"`
 		NodePathValue    *string      `json:"node_path_value,omitempty"`
+		ResourceValue    *string      `json:"resource_value,omitempty"`
 		// omitzero, not omitempty — see StringArrayValue's doc comment on
 		// SetNodePropertyParams for why: it preserves the nil-vs-empty-slice
 		// distinction across this marshal, which omitempty would collapse.
@@ -742,6 +783,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Transform2DValue:   params.Transform2DValue,
 		Transform3DValue:   params.Transform3DValue,
 		NodePathValue:      params.NodePathValue,
+		ResourceValue:      resourceResPath,
 		StringArrayValue:   params.StringArrayValue,
 		IntArrayValue:      params.IntArrayValue,
 		FloatArrayValue:    params.FloatArrayValue,

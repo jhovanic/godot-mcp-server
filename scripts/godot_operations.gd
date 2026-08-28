@@ -141,22 +141,29 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 ## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis/Transform2D/
 ## Transform3D/NodePath/PackedStringArray/PackedInt32Array/
 ## PackedFloat32Array/PackedVector2Array/PackedColorArray/
-## PackedVector3Array/Array[NodePath] — the caller sends exactly one of
-## string_value/int_value/float_value/bool_value/vector2_value/
+## PackedVector3Array/Array[NodePath]/Resource — the caller sends exactly
+## one of string_value/int_value/float_value/bool_value/vector2_value/
 ## vector3_value/color_value/vector2i_value/vector3i_value/
 ## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/
 ## basis_value/transform2d_value/transform3d_value/node_path_value/
 ## string_array_value/int_array_value/float_array_value/
 ## vector2_array_value/color_array_value/vector3_array_value/
-## node_path_array_value) on one node addressed by node_path (relative to
-## the scene root; empty string means the root itself), then re-packs and
-## saves the scene.
+## node_path_array_value/resource_value) on one node addressed by node_path
+## (relative to the scene root; empty string means the root itself), then
+## re-packs and saves the scene.
+##
+## property_name "script" is refused unconditionally, regardless of which
+## *_value field is sent: assigning a Script is code execution, not a data
+## write (see CLAUDE.md's first hard constraint).
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
 ## saves if the value actually changed to the requested one — a mistyped
 ## property_name or a type Godot can't coerce is reported as an error here,
-## never written as a no-op.
+## never written as a no-op. resource_value additionally gets its class
+## checked against the property's declared type before set() is ever
+## called, since Object.set() does not itself enforce that a Resource-typed
+## property receives a compatible class.
 func _op_set_node_property(params: Variant) -> Dictionary:
 	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("node_path") or not params.has("property_name"):
 		return _err("set_node_property: missing \"path\", \"node_path\" or \"property_name\" param")
@@ -166,6 +173,12 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 	var property_name: String = params["property_name"]
 	if not path.begins_with("res://"):
 		return _err("set_node_property: path must be a res:// path")
+	# Defense in depth alongside the Go-side check in
+	# headless.Client.SetNodeProperty: assigning a Script is code execution
+	# by another name, not a data write, so this operation must never write
+	# it regardless of what calls this script directly.
+	if property_name == "script":
+		return _err("set_node_property: refusing to set \"script\": assigning a Script is not permitted")
 
 	var value: Variant = null
 	var values_set := 0
@@ -308,8 +321,19 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 			npa_list.append(NodePath(str(npa_item)))
 		value = npa_list
 		values_set += 1
+	if params.get("resource_value") != null:
+		var res_path: String = params["resource_value"]
+		if not res_path.begins_with("res://"):
+			return _err("set_node_property: resource_value must be a res:// path")
+		if not ResourceLoader.exists(res_path):
+			return _err("set_node_property: no resource at %s" % res_path)
+		var loaded_resource: Resource = load(res_path)
+		if loaded_resource == null:
+			return _err("set_node_property: failed to load resource at %s" % res_path)
+		value = loaded_resource
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value/resource_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)
@@ -328,6 +352,24 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 	if target == null:
 		root.free()
 		return _err("set_node_property: no node at %s" % node_path)
+
+	# Object.set() does not enforce a Resource-typed property's declared
+	# class — it will happily store a reference of the wrong class, and the
+	# generic actual != value check below wouldn't catch that (the wrong
+	# reference was genuinely stored, so get() echoes it straight back). So
+	# a loaded resource_value is checked against the property's declared
+	# class via ClassDB before ever calling set(), and rejected with a
+	# specific error instead of silently writing an incompatible reference.
+	if value is Resource:
+		for prop in target.get_property_list():
+			if prop["name"] != property_name:
+				continue
+			var expected_class: String = prop.get("class_name", "")
+			if expected_class != "" and not ClassDB.is_parent_class(value.get_class(), expected_class):
+				var value_class: String = value.get_class()
+				root.free()
+				return _err("set_node_property: resource of class %s is not compatible with %s (expects %s)" % [value_class, property_name, expected_class])
+			break
 
 	var previous: Variant = target.get(property_name)
 	target.set(property_name, value)

@@ -1634,6 +1634,146 @@ func TestSetNodeProperty_RealGodot_EmptyNodePathArray(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_ResourceValue exercises the reference-only
+// resource path: resource_value names an existing .tres file, which must
+// get loaded and assigned to a Texture2D-typed property, producing a real
+// ext_resource entry in the saved scene (Godot's own serialization, not
+// something this tool constructs by hand).
+func TestSetNodeProperty_RealGodot_ResourceValue(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	const placeholderTexture = `[gd_resource type="PlaceholderTexture2D" format=3]
+
+[resource]
+size = Vector2(16, 16)
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder.tres"), []byte(placeholderTexture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resVal := "placeholder.tres"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Sprite",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `path="res://placeholder.tres"`) {
+		t.Errorf("saved scene missing ext_resource pointing at placeholder.tres: %s", data)
+	}
+	if !strings.Contains(string(data), "texture = ExtResource(") {
+		t.Errorf("saved scene missing texture = ExtResource(...) assignment: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_ResourceValueTypeMismatch verifies the
+// type-check-before-set decided in the resource-reference maintainer
+// conversation: Object.set() alone would happily store a Curve reference on
+// a Texture2D-typed property (it doesn't enforce the declared type), so
+// this must be caught explicitly and refused rather than silently written.
+func TestSetNodeProperty_RealGodot_ResourceValueTypeMismatch(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	const mismatchedResource = `[gd_resource type="Curve" format=3]
+
+[resource]
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "mismatched.tres"), []byte(mismatchedResource), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resVal := "mismatched.tres"
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Sprite",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty assigning a Curve to a Texture2D-typed property, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the type-mismatch rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_ResourceValueMissingFile(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resVal := "does_not_exist.tres"
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Sprite",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a resource_value pointing at a nonexistent file, want error")
+	}
+}
+
+// TestSetNodeProperty_RealGodot_ScriptPropertyBlocked confirms the "script"
+// hard block end-to-end, not just via the fast Go-side check exercised in
+// headless_test.go: even a real, loadable script resource must never be
+// assignable to a node's script property through this tool.
+func TestSetNodeProperty_RealGodot_ScriptPropertyBlocked(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resVal := "custom_props_holder.gd"
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Cube",
+		PropertyName:  "script",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on property_name \"script\" against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the \"script\" block:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
 func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	c := setNodePropertyFixtureClient(t)
 

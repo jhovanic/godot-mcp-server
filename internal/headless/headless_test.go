@@ -1518,6 +1518,124 @@ func TestSetNodeProperty_RejectsNodePathArrayPlusOtherValue(t *testing.T) {
 	}
 }
 
+// ResourceValue reopens path validation the same way ScenePath does — see
+// FEATURES.md's "Resource / sub-resource references" item — and additionally
+// carries a hard, value-type-agnostic block on property_name == "script"
+// (assigning a Script is code execution, not a data write, per CLAUDE.md's
+// first hard constraint), so these are testable without a Godot binary the
+// same way the ScenePath/exactly-one-value cases above are: a lone,
+// in-root resource_value on an ordinary property must reach exec (and fail
+// there, on the garbage GodotBin), while a traversal path or a "script"
+// property must be rejected before ever reaching exec.
+
+func TestSetNodeProperty_ResourceValueAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	resVal := "textures/icon.png"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone resource_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone resource_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsResourceValuePlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	resVal := "textures/icon.png"
+	strVal := "not a resource"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+		StringValue:   &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with resource_value and string_value both set, want error")
+	}
+}
+
+func TestSetNodeProperty_RejectsOutOfRootResourceValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	resVal := "../outside.png"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "texture",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a traversal resource_value, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("SetNodeProperty error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsScriptPropertyWithResourceValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	resVal := "player.gd"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "script",
+		ResourceValue: &resVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on property_name \"script\", want error")
+	}
+	if strings.Contains(err.Error(), "running godot") {
+		t.Fatalf("SetNodeProperty on \"script\" reached exec instead of being rejected up front: %v", err)
+	}
+}
+
+// The "script" block is a check on property_name, not on resource_value: it
+// must refuse the property regardless of which value field the caller used
+// to try to set it, since the risk (attaching arbitrary code to a node) is
+// the same no matter how the caller phrases the request.
+func TestSetNodeProperty_RejectsScriptPropertyRegardlessOfValueType(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	strVal := "res://not_even_a_real_script.gd"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "script",
+		StringValue:  &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on property_name \"script\" via string_value, want error")
+	}
+	if strings.Contains(err.Error(), "running godot") {
+		t.Fatalf("SetNodeProperty on \"script\" via string_value reached exec instead of being rejected up front: %v", err)
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

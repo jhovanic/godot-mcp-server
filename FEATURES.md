@@ -57,7 +57,13 @@ changelog.
       minimal diff (see `internal/headless.Client.SetNodeProperty`'s doc comment). Value types,
       roughly ordered from simplest to implement to most complex — which also tends to track how
       commonly each is actually needed on a node property, so this list doubles as a priority
-      order for what to build next:
+      order for what to build next. Decided (2026-08-27): with the resource-reference item below
+      now landed, value-type coverage stops there for now — primitives, the fixed-arity structs,
+      the primitive/vector/color packed arrays, `Array[NodePath]`, and external resource-file
+      references are enough real-world coverage per-field GDScript implementation cost. The
+      remaining items below (`PackedByteArray`, `PackedInt64Array`/`PackedFloat64Array`/
+      `PackedVector4Array`, `Array[String]`/`Array[Resource]`) stay deliberately unimplemented
+      until actual tool usage shows a property that needs one, not built ahead of demand:
     - [x] Primitives: string, int, float, bool (int also covers Godot's int-backed enums, since
           `Object.set()` takes the raw int either way — no separate enum type needed)
     - [x] Vector2 (2D position, scale, size, ...)
@@ -113,17 +119,49 @@ changelog.
     - [x] Typed `Array[T]` properties — Godot's designer-typed generic arrays (e.g.
           `Control.accessibility_flow_to_nodes`) are a different Variant mechanism from the fixed
           `Packed*Array` family above (a generic `Array` carrying element-type metadata, not a
-          native packed array), so this is its own item, not a `Packed*Array` variant:
+          native packed array), so this is its own item, not a `Packed*Array` variant. Note: the
+          genericness is in the engine's type system only — neither `SetNodePropertyParams` nor
+          `_op_set_node_property` has any generic "any `T`" path; each element type is its own Go
+          field and its own hand-written GDScript branch, same as every fixed-arity value type
+          above. `Array[NodePath]` below is the only one actually implemented so far:
         - [x] `Array[NodePath]` — same trust boundary as the existing scalar `NodePathValue`
               (addresses nodes already in the loaded scene tree, not the filesystem)
         - [ ] `Array[String]`/`Array[Resource]` holding resource paths or loaded resource
-              references — parked deliberately: this overlaps the "Resource / sub-resource
-              references" item below and gets decided together with it, in the same maintainer
-              conversation, rather than resolved here as a side effect of typed-array support
-    - [ ] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — the biggest
-          item: reopens path validation (the referenced resource has to resolve inside the
-          project root the same way a directly-addressed file does), so this needs its own
-          maintainer conversation before starting, per CLAUDE.md
+              references — still parked, but no longer blocked on an undecided resource-reference
+              conversation: that conversation (see "Resource / sub-resource references" below) is
+              now settled for the scalar case. Once a scalar `ResourceValue` field exists,
+              `Array[Resource]` of external-file references can follow the same pattern;
+              `Array[String]` holding raw (unloaded) resource path strings is a separate, weaker
+              semantic still to be decided
+    - [x] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — reopened
+          path validation as expected, so needed its own maintainer conversation before starting,
+          per CLAUDE.md; that conversation happened (2026-08-27) and settled scope for v1, all of
+          which is implemented (`SetNodePropertyParams.ResourceValue`, `internal/tools`'s
+          `resource_value`, and `_op_set_node_property`'s matching branch in
+          `scripts/godot_operations.gd`):
+        - External resource *files* only, referenced by a project-relative path validated through
+          `Root.Resolve` exactly like `ScenePath`/`ScriptPath` today, converted to `res://`, then
+          loaded via `load()` on that derived path. `_op_set_node_property` must never call
+          `load()` on anything the caller supplies directly — Godot's `load()` also accepts
+          absolute OS paths and `user://`, which would sidestep `Root.Resolve` entirely.
+        - Reference-only, not construct-in-place: the tool points a property at an existing
+          resource file; it never builds a new Resource from inline parameters (a materially
+          bigger surface — general object construction — that nothing else in this design does).
+        - Embedded sub-resources (a `.tscn`'s own `[sub_resource]` blocks, addressed by an in-file
+          ID rather than a filesystem path) are explicitly out of scope. There's no tool that
+          surfaces a scene's sub-resource table to the AI in the first place — `read_scene_tree`
+          reports only name/type/children (see `_node_to_dict` in `scripts/godot_operations.gd`),
+          no properties at all — so there's nothing for a caller to even name yet. Revisit only if
+          `read_scene_tree` grows property/resource reporting.
+        - The loaded resource's runtime class must be checked against the property's declared
+          type (via `get_property_list()`/ClassDB) before calling `set()`, and a mismatch
+          rejected with a clear error. `Object.set()` silently no-ops or coerces badly on a type
+          mismatch, and unlike a human using the inspector, an agentic caller has no other way to
+          notice its "successful" tool call didn't do what it asked.
+        - `property_name == "script"` (and any other `Script`/`GDScript`-typed property) is
+          hard-blocked unconditionally, regardless of the above — a resource reference there is
+          arbitrary code execution by another name, a direct violation of CLAUDE.md's first hard
+          constraint, and not something to leave to Godot's own `set()` to (not) catch.
     - [ ] Direct Node object references (a property typed to expect a live Node instance, not a
           NodePath string) — likely stays out of scope entirely; there's no clean way to express
           "assign this other node" as a scoped, structured tool argument the way everything above
