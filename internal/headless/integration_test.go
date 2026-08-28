@@ -274,10 +274,13 @@ func writeMinimalPNG(t *testing.T, path string) {
 // PackedStringArray property in _spawnable_scenes — underscore-prefixed,
 // but genuinely a public ClassDB property, not a private implementation
 // detail), "Split" (a SplitContainer, which carries a real
-// PackedInt32Array property in split_offsets), and "Poly" (a
+// PackedInt32Array property in split_offsets), "Poly" (a
 // CollisionPolygon2D, which carries a real PackedVector2Array property in
-// polygon) — between them, every value type SetNodeProperty supports has a
-// genuine target property to exercise.
+// polygon), and "Ctrl" (a Control, which carries a real typed
+// Array[NodePath] property in accessibility_flow_to_nodes — a different
+// Variant mechanism from the Packed*Array family, see NodePathArrayValue's
+// doc comment) — between them, every value type SetNodeProperty supports
+// has a genuine target property to exercise.
 //
 // Vector3i and Plane are the two types with no built-in Node target at all:
 // no built-in Node class exposes either property type (verified against a
@@ -347,6 +350,11 @@ func _init() -> void:
 	poly.name = "Poly"
 	main.add_child(poly)
 	poly.owner = main
+
+	var ctrl := Control.new()
+	ctrl.name = "Ctrl"
+	main.add_child(ctrl)
+	ctrl.owner = main
 
 	var packed := PackedScene.new()
 	var pack_err := packed.pack(main)
@@ -1559,6 +1567,70 @@ func TestSetNodeProperty_RealGodot_EmptyVector3Array(t *testing.T) {
 	}
 	if strings.Contains(string(data), "vertices") {
 		t.Errorf("saved scene still has vertices after clearing it to an empty array: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_NodePathArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:          "main.tscn",
+		NodePath:           "Ctrl",
+		PropertyName:       "accessibility_flow_to_nodes",
+		NodePathArrayValue: []string{"../A", "../B"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `accessibility_flow_to_nodes = Array[NodePath]([NodePath("../A"), NodePath("../B")])`) {
+		t.Errorf("saved scene missing expected accessibility_flow_to_nodes property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyNodePathArray mirrors the other
+// TestSetNodeProperty_RealGodot_Empty*Array tests above: verified
+// empirically that Control.accessibility_flow_to_nodes is omitted from the
+// saved scene once cleared back to empty.
+func TestSetNodeProperty_RealGodot_EmptyNodePathArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:          "main.tscn",
+		NodePath:           "Ctrl",
+		PropertyName:       "accessibility_flow_to_nodes",
+		NodePathArrayValue: []string{"../A"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:          "main.tscn",
+		NodePath:           "Ctrl",
+		PropertyName:       "accessibility_flow_to_nodes",
+		NodePathArrayValue: []string{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "accessibility_flow_to_nodes") {
+		t.Errorf("saved scene still has accessibility_flow_to_nodes after clearing it to an empty array: %s", data)
 	}
 }
 

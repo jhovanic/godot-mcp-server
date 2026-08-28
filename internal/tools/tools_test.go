@@ -1659,6 +1659,47 @@ func TestSetNodeProperty_Vector3ArraySuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_NodePathArraySuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Ctrl",
+			PropertyName:  "accessibility_flow_to_nodes",
+			PreviousValue: "[]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":            "main.tscn",
+			"node_path":             "Ctrl",
+			"property_name":         "accessibility_flow_to_nodes",
+			"node_path_array_value": []any{"../A", "../B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.NodePathArrayValue
+	if len(got) != 2 || got[0] != "../A" || got[1] != "../B" {
+		t.Fatalf("handler did not pass through node_path_array_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

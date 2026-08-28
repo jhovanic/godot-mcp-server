@@ -110,6 +110,16 @@ changelog.
         - [ ] PackedInt64Array / PackedFloat64Array / PackedVector4Array — no built-in Node
               property uses any of these three at all (verified via ClassDB introspection), so
               low priority
+    - [x] Typed `Array[T]` properties — Godot's designer-typed generic arrays (e.g.
+          `Control.accessibility_flow_to_nodes`) are a different Variant mechanism from the fixed
+          `Packed*Array` family above (a generic `Array` carrying element-type metadata, not a
+          native packed array), so this is its own item, not a `Packed*Array` variant:
+        - [x] `Array[NodePath]` — same trust boundary as the existing scalar `NodePathValue`
+              (addresses nodes already in the loaded scene tree, not the filesystem)
+        - [ ] `Array[String]`/`Array[Resource]` holding resource paths or loaded resource
+              references — parked deliberately: this overlaps the "Resource / sub-resource
+              references" item below and gets decided together with it, in the same maintainer
+              conversation, rather than resolved here as a side effect of typed-array support
     - [ ] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — the biggest
           item: reopens path validation (the referenced resource has to resolve inside the
           project root the same way a directly-addressed file does), so this needs its own
