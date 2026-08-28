@@ -99,7 +99,7 @@ changelog.
         - [x] PackedVector2Array — each element is itself a nested `{x, y}` object, not a bare
               scalar; genuinely common for 2D collision/shape data (`Polygon2D.polygon`,
               `CollisionPolygon2D.polygon`, `Line2D.points`)
-        - [ ] PackedColorArray — nested `{r, g, b, a}` elements
+        - [x] PackedColorArray — nested `{r, g, b, a}` elements
         - [ ] PackedVector3Array — nested `{x, y, z}` elements
         - [ ] PackedByteArray — raw binary (e.g. `TileMapLayer.tile_map_data`); likely out of
               scope, since it's internal engine-packed data rather than something meant for

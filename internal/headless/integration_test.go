@@ -1310,6 +1310,131 @@ func TestSetNodeProperty_RealGodot_AABB(t *testing.T) {
 	}
 }
 
+// polygon2DFixtureClient builds another separate, minimal fixture project,
+// for the same reason rect2iFixtureClient and aabbFixtureClient do:
+// Polygon2D — the cleanest built-in Node target for PackedColorArray
+// (vertex_colors) — leaks an internal mesh RID at process exit (Godot
+// prints an ERROR line about it, though it doesn't fail the run), the same
+// category of noise as Window and VisibleOnScreenNotifier3D. Keeping it
+// confined to its own throwaway fixture avoids adding that noise to every
+// other SetNodeProperty test.
+func polygon2DFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	const setupScript = `extends SceneTree
+
+func _init() -> void:
+	var main := Node2D.new()
+	main.name = "Main"
+
+	var poly := Polygon2D.new()
+	poly.name = "ColorPoly"
+	main.add_child(poly)
+	poly.owner = main
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(main)
+	if pack_err != OK:
+		push_error("failed to pack fixture scene: %d" % pack_err)
+	var save_err := ResourceSaver.save(packed, "res://main.tscn")
+	if save_err != OK:
+		push_error("failed to save fixture scene: %d" % save_err)
+	quit()
+`
+	scriptPath := filepath.Join(projectDir, "generate_polygon2d_fixture.gd")
+	if err := os.WriteFile(scriptPath, []byte(setupScript), 0o644); err != nil {
+		t.Fatalf("writing fixture-generation script: %v", err)
+	}
+
+	// #nosec G204 -- test-only, fixed argv, godotBin/projectDir/scriptPath
+	// are all test-controlled, not external input.
+	cmd := exec.Command(godotBin, "--headless", "--path", projectDir, "--script", scriptPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generating polygon2d fixture scene: %v\n%s", err, out)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestSetNodeProperty_RealGodot_ColorArray(t *testing.T) {
+	c := polygon2DFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "ColorPoly",
+		PropertyName: "vertex_colors",
+		ColorArrayValue: []Color{
+			{R: 1, G: 0, B: 0, A: 1},
+			{R: 0, G: 1, B: 0, A: 0.5},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "vertex_colors = PackedColorArray(1, 0, 0, 1, 0, 1, 0, 0.5)") {
+		t.Errorf("saved scene missing expected vertex_colors property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyColorArray mirrors the other
+// TestSetNodeProperty_RealGodot_Empty*Array tests above: Polygon2D's
+// vertex_colors is omitted from the saved scene once cleared back to
+// empty, following the same omit-when-empty pattern already confirmed for
+// _spawnable_scenes, tab_stops, and polygon — verified empirically here
+// too, not assumed.
+func TestSetNodeProperty_RealGodot_EmptyColorArray(t *testing.T) {
+	c := polygon2DFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "ColorPoly",
+		PropertyName:    "vertex_colors",
+		ColorArrayValue: []Color{{R: 1, G: 0, B: 0, A: 1}},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:       "main.tscn",
+		NodePath:        "ColorPoly",
+		PropertyName:    "vertex_colors",
+		ColorArrayValue: []Color{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "vertex_colors") {
+		t.Errorf("saved scene still has vertex_colors after clearing it to an empty array: %s", data)
+	}
+}
+
 func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	c := setNodePropertyFixtureClient(t)
 

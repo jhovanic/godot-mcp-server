@@ -1571,6 +1571,50 @@ func TestSetNodeProperty_Vector2ArraySuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_ColorArraySuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "ColorPoly",
+			PropertyName:  "vertex_colors",
+			PreviousValue: "[]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "ColorPoly",
+			"property_name": "vertex_colors",
+			"color_array_value": []any{
+				map[string]any{"r": 1, "g": 0, "b": 0, "a": 1},
+				map[string]any{"r": 0, "g": 1, "b": 0, "a": 0.5},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.ColorArrayValue
+	if len(got) != 2 || got[0].R != 1 || got[0].G != 0 || got[1].G != 1 || got[1].A != 0.5 {
+		t.Fatalf("handler did not pass through color_array_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}
