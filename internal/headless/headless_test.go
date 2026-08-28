@@ -1075,6 +1075,73 @@ func TestSetNodeProperty_RejectsNodePathPlusOtherValue(t *testing.T) {
 	}
 }
 
+// StringArrayValue participates in the same "exactly one *_value field"
+// count as the other value fields, proven the same way as
+// Vector2AloneIsValid above. It also needs its own nil-vs-empty-slice case:
+// unlike a pointer field, a slice field's "was this provided at all" signal
+// is nil vs non-nil, not zero-value vs non-zero-value — an explicitly empty
+// array ([]string{}, decoded from a JSON "[]") is a legitimate value (an
+// empty PackedStringArray), not "not set".
+
+func TestSetNodeProperty_StringArrayAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{"res://a.tscn", "res://b.tscn"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone string_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone string_array_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_EmptyStringArrayIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with an explicitly empty string_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected an explicitly empty string_array_value as if it were unset: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsStringArrayPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	strVal := "hello"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{"res://a.tscn"},
+		StringValue:      &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with string_array_value and string_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

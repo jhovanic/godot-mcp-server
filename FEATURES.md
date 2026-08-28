@@ -87,10 +87,26 @@ changelog.
     - [x] NodePath — addresses another node in the *already-loaded* scene tree (not a filesystem
           path, so it doesn't reopen the path-validation question the way resource references
           below do)
-    - [ ] Packed arrays (PackedStringArray, PackedInt32Array, PackedFloat32Array,
-          PackedVector2Array, PackedColorArray, ...) — variable-length, and each array type needs
-          its own wire representation; a materially different design from the fixed-arity structs
-          above, not just another field
+    - [ ] Packed arrays — variable-length, and each array type needs its own wire representation;
+          a materially different design from the fixed-arity structs above, not just another
+          field. Scoped one array type at a time rather than all at once:
+        - [x] PackedStringArray — simplest wire shape (a plain JSON array of strings, no
+              int/float ambiguity); establishes the variable-length-array pattern (including the
+              nil-vs-explicitly-empty-array distinction other array types will need too — see
+              `SetNodePropertyParams.StringArrayValue`'s doc comment) for the rest to follow
+        - [ ] PackedInt32Array — same flat-scalar-array pattern, next simplest
+        - [ ] PackedFloat32Array — same flat-scalar-array pattern
+        - [ ] PackedVector2Array — each element is itself a nested `{x, y}` object, not a bare
+              scalar; genuinely common for 2D collision/shape data (`Polygon2D.polygon`,
+              `CollisionPolygon2D.polygon`, `Line2D.points`)
+        - [ ] PackedColorArray — nested `{r, g, b, a}` elements
+        - [ ] PackedVector3Array — nested `{x, y, z}` elements
+        - [ ] PackedByteArray — raw binary (e.g. `TileMapLayer.tile_map_data`); likely out of
+              scope, since it's internal engine-packed data rather than something meant for
+              external hand-editing
+        - [ ] PackedInt64Array / PackedFloat64Array / PackedVector4Array — no built-in Node
+              property uses any of these three at all (verified via ClassDB introspection), so
+              low priority
     - [ ] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — the biggest
           item: reopens path validation (the referenced resource has to resolve inside the
           project root the same way a directly-addressed file does), so this needs its own

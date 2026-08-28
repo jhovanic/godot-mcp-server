@@ -270,8 +270,11 @@ func writeMinimalPNG(t *testing.T, path string) {
 // any coordinate outside the configured frame grid), "IntGrid" (a plain
 // Node with the fixture's own custom_props_holder.gd script attached), and
 // "Remote" (a RemoteTransform2D, which carries a real NodePath property in
-// remote_path) — between them, every value type SetNodeProperty supports
-// has a genuine target property to exercise.
+// remote_path), and "Spawner" (a MultiplayerSpawner, which carries a real
+// PackedStringArray property in _spawnable_scenes — underscore-prefixed,
+// but genuinely a public ClassDB property, not a private implementation
+// detail) — between them, every value type SetNodeProperty supports has a
+// genuine target property to exercise.
 //
 // Vector3i and Plane are the two types with no built-in Node target at all:
 // no built-in Node class exposes either property type (verified against a
@@ -326,6 +329,11 @@ func _init() -> void:
 	remote.name = "Remote"
 	main.add_child(remote)
 	remote.owner = main
+
+	var spawner := MultiplayerSpawner.new()
+	spawner.name = "Spawner"
+	main.add_child(spawner)
+	spawner.owner = main
 
 	var packed := PackedScene.new()
 	var pack_err := packed.pack(main)
@@ -722,6 +730,76 @@ func TestSetNodeProperty_RealGodot_NodePath(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `remote_path = NodePath("../Target")`) {
 		t.Errorf("saved scene missing expected remote_path property: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_StringArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		NodePath:         "Spawner",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{"res://a.tscn", "res://b.tscn"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `_spawnable_scenes = PackedStringArray("res://a.tscn", "res://b.tscn")`) {
+		t.Errorf("saved scene missing expected _spawnable_scenes property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyStringArray proves an explicitly empty
+// StringArrayValue ([]string{}, as opposed to nil) round-trips end to end as
+// "clear this array" rather than being silently dropped from the request —
+// the exact failure mode SetNodePropertyParams.StringArrayValue's doc
+// comment describes for why it uses "omitzero" instead of "omitempty".
+// Godot itself omits a property from a saved .tscn once it matches its
+// default value (an empty array is PackedStringArray's zero value), so the
+// property is set to something non-empty first, then cleared, and the
+// assertion is on the property's absence, not on a literal empty-array
+// line.
+func TestSetNodeProperty_RealGodot_EmptyStringArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		NodePath:         "Spawner",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{"res://a.tscn"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:        "main.tscn",
+		NodePath:         "Spawner",
+		PropertyName:     "_spawnable_scenes",
+		StringArrayValue: []string{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "_spawnable_scenes") {
+		t.Errorf("saved scene still has _spawnable_scenes after clearing it to an empty array: %s", data)
 	}
 }
 

@@ -489,15 +489,17 @@ type Color struct {
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
-// BasisValue, Transform2DValue, Transform3DValue, NodePathValue must be set
-// — which one determines the GDScript-side type the property is set to (see
-// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
-// doesn't distinguish int from float the way Go and GDScript both do.
+// BasisValue, Transform2DValue, Transform3DValue, NodePathValue,
+// StringArrayValue must be set — which one determines the GDScript-side
+// type the property is set to (see scripts/godot_operations.gd's
+// _op_set_node_property), since JSON itself doesn't distinguish int from
+// float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
 // Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
-// Transform2D, Transform3D, and NodePath for now. Godot node properties
-// also include other compound types (resource references, packed arrays,
+// Transform2D, Transform3D, NodePath, and PackedStringArray for now. Godot
+// node properties also include other compound types (resource references,
+// other packed array element types — int, float, Vector2, Vector3, Color,
 // ...); supporting those is a separate, larger design (how does an AI
 // client express a sub-resource reference as tool arguments?) tracked as a
 // future FEATURES.md item, not a variant of this one.
@@ -536,6 +538,21 @@ type SetNodePropertyParams struct {
 	// doesn't reopen the path-validation question a resource reference
 	// would.
 	NodePathValue *string `json:"node_path_value,omitempty" jsonschema:"set property_name to this NodePath value, addressing another node in the same scene (e.g. \"../Target\"); exactly one of the *_value fields must be set"`
+	// StringArrayValue uses "omitzero", not "omitempty", on its json tag: an
+	// explicitly empty array ([]string{}, decoded from a request's "[]") is
+	// a legitimate PackedStringArray value — clearing a list-valued
+	// property is a real use case — not "this field wasn't provided", which
+	// is what a nil slice means. omitempty can't tell those apart:
+	// encoding/json treats any zero-length slice, nil or not, as "empty"
+	// and drops the field entirely, which would have silently turned a
+	// request to clear an array into one Godot sees as having no array
+	// value at all. omitzero only omits the true zero value (nil for a
+	// slice), so a nil slice still marshals to nothing (read as "not
+	// provided" by the operations script's != null check) while a non-nil
+	// empty slice marshals to "[]" (read as "provided, and empty") — and
+	// jsonschema-go treats omitzero the same as omitempty for marking this
+	// field optional rather than required in the generated tool schema.
+	StringArrayValue []string `json:"string_array_value,omitzero" jsonschema:"set property_name to this PackedStringArray value (e.g. FileDialog.filters); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -609,13 +626,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.Transform2DValue != nil,
 		params.Transform3DValue != nil,
 		params.NodePathValue != nil,
+		params.StringArrayValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -649,6 +667,10 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Transform2DValue *Transform2D `json:"transform2d_value,omitempty"`
 		Transform3DValue *Transform3D `json:"transform3d_value,omitempty"`
 		NodePathValue    *string      `json:"node_path_value,omitempty"`
+		// omitzero, not omitempty — see StringArrayValue's doc comment on
+		// SetNodePropertyParams for why: it preserves the nil-vs-empty-slice
+		// distinction across this marshal, which omitempty would collapse.
+		StringArrayValue []string `json:"string_array_value,omitzero"`
 	}{
 		Path:             resPath,
 		NodePath:         params.NodePath,
@@ -671,6 +693,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		Transform2DValue: params.Transform2DValue,
 		Transform3DValue: params.Transform3DValue,
 		NodePathValue:    params.NodePathValue,
+		StringArrayValue: params.StringArrayValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}
