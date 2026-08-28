@@ -1435,6 +1435,133 @@ func TestSetNodeProperty_RealGodot_EmptyColorArray(t *testing.T) {
 	}
 }
 
+// navigationObstacle3DFixtureClient builds another separate, minimal
+// fixture project, for the same reason polygon2DFixtureClient and its
+// predecessors do: NavigationObstacle3D — the only built-in Node target for
+// PackedVector3Array (vertices) that actually persists to the saved scene
+// (CPUParticles3D.emission_points and emission_normals were ruled out:
+// both have usage=0 in their ClassDB property info, meaning Godot never
+// stores them regardless of value — they're runtime-only generated caches,
+// not editable scene state) — leaks navigation-server and rendering RIDs
+// at process exit (several ERROR lines, heavier than Window/
+// VisibleOnScreenNotifier3D/Polygon2D's leaks but the same category).
+// Keeping it confined to its own throwaway fixture avoids adding that
+// noise to every other SetNodeProperty test.
+func navigationObstacle3DFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	const setupScript = `extends SceneTree
+
+func _init() -> void:
+	var main := Node2D.new()
+	main.name = "Main"
+
+	var obs := NavigationObstacle3D.new()
+	obs.name = "Obs"
+	main.add_child(obs)
+	obs.owner = main
+
+	var packed := PackedScene.new()
+	var pack_err := packed.pack(main)
+	if pack_err != OK:
+		push_error("failed to pack fixture scene: %d" % pack_err)
+	var save_err := ResourceSaver.save(packed, "res://main.tscn")
+	if save_err != OK:
+		push_error("failed to save fixture scene: %d" % save_err)
+	quit()
+`
+	scriptPath := filepath.Join(projectDir, "generate_navigation_obstacle_3d_fixture.gd")
+	if err := os.WriteFile(scriptPath, []byte(setupScript), 0o644); err != nil {
+		t.Fatalf("writing fixture-generation script: %v", err)
+	}
+
+	// #nosec G204 -- test-only, fixed argv, godotBin/projectDir/scriptPath
+	// are all test-controlled, not external input.
+	cmd := exec.Command(godotBin, "--headless", "--path", projectDir, "--script", scriptPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generating navigation obstacle 3d fixture scene: %v\n%s", err, out)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestSetNodeProperty_RealGodot_Vector3Array(t *testing.T) {
+	c := navigationObstacle3DFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Obs",
+		PropertyName: "vertices",
+		Vector3ArrayValue: []Vector3{
+			{X: 1.5, Y: 2.5, Z: 3.5},
+			{X: -1, Y: -2, Z: -3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "vertices = PackedVector3Array(1.5, 2.5, 3.5, -1, -2, -3)") {
+		t.Errorf("saved scene missing expected vertices property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyVector3Array mirrors the other
+// TestSetNodeProperty_RealGodot_Empty*Array tests above: verified
+// empirically, not assumed, that NavigationObstacle3D.vertices is omitted
+// from the saved scene once cleared back to empty.
+func TestSetNodeProperty_RealGodot_EmptyVector3Array(t *testing.T) {
+	c := navigationObstacle3DFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Obs",
+		PropertyName:      "vertices",
+		Vector3ArrayValue: []Vector3{{X: 1, Y: 2, Z: 3}},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Obs",
+		PropertyName:      "vertices",
+		Vector3ArrayValue: []Vector3{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "vertices") {
+		t.Errorf("saved scene still has vertices after clearing it to an empty array: %s", data)
+	}
+}
+
 func TestSetNodeProperty_RealGodot_UnknownProperty(t *testing.T) {
 	c := setNodePropertyFixtureClient(t)
 

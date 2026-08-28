@@ -491,17 +491,20 @@ type Color struct {
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
 // BasisValue, Transform2DValue, Transform3DValue, NodePathValue,
 // StringArrayValue, IntArrayValue, FloatArrayValue, Vector2ArrayValue,
-// ColorArrayValue must be set — which one determines the GDScript-side
-// type the property is set to (see scripts/godot_operations.gd's
-// _op_set_node_property), since JSON itself doesn't distinguish int from
-// float the way Go and GDScript both do.
+// ColorArrayValue, Vector3ArrayValue must be set — which one determines the
+// GDScript-side type the property is set to (see
+// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
+// doesn't distinguish int from float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
 // Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
 // Transform2D, Transform3D, NodePath, PackedStringArray, PackedInt32Array,
-// PackedFloat32Array, PackedVector2Array, and PackedColorArray for now.
-// Godot node properties also include other compound types (resource
-// references, PackedVector3Array); supporting those is a separate, larger
+// PackedFloat32Array, PackedVector2Array, PackedColorArray, and
+// PackedVector3Array for now — the complete set of packed array element
+// types that have a genuine built-in Node property target (see
+// FEATURES.md's Packed arrays section for the ones that don't and are
+// tracked separately). Godot node properties also include other compound
+// types (resource references, ...); supporting those is a separate, larger
 // design (how does an AI client express a sub-resource reference as tool
 // arguments?) tracked as a future FEATURES.md item, not a variant of this
 // one.
@@ -571,6 +574,10 @@ type SetNodePropertyParams struct {
 	// the other packed array fields above, and for the same reason uses
 	// "omitzero" rather than "omitempty" on its json tag.
 	ColorArrayValue []Color `json:"color_array_value,omitzero" jsonschema:"set property_name to this PackedColorArray value (e.g. Polygon2D.vertex_colors); exactly one of the *_value fields must be set"`
+	// Vector3ArrayValue has the same nil-vs-explicitly-empty distinction as
+	// the other packed array fields above, and for the same reason uses
+	// "omitzero" rather than "omitempty" on its json tag.
+	Vector3ArrayValue []Vector3 `json:"vector3_array_value,omitzero" jsonschema:"set property_name to this PackedVector3Array value (e.g. NavigationObstacle3D.vertices); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -649,13 +656,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.FloatArrayValue != nil,
 		params.Vector2ArrayValue != nil,
 		params.ColorArrayValue != nil,
+		params.Vector3ArrayValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -697,6 +705,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		FloatArrayValue   []float64 `json:"float_array_value,omitzero"`
 		Vector2ArrayValue []Vector2 `json:"vector2_array_value,omitzero"`
 		ColorArrayValue   []Color   `json:"color_array_value,omitzero"`
+		Vector3ArrayValue []Vector3 `json:"vector3_array_value,omitzero"`
 	}{
 		Path:              resPath,
 		NodePath:          params.NodePath,
@@ -724,6 +733,7 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		FloatArrayValue:   params.FloatArrayValue,
 		Vector2ArrayValue: params.Vector2ArrayValue,
 		ColorArrayValue:   params.ColorArrayValue,
+		Vector3ArrayValue: params.Vector3ArrayValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

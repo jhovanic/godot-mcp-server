@@ -1393,6 +1393,68 @@ func TestSetNodeProperty_RejectsColorArrayPlusOtherValue(t *testing.T) {
 	}
 }
 
+// Vector3ArrayValue has the same nil-vs-empty-slice nuance as the other
+// packed array fields above, and participates in the same "exactly one
+// *_value field" count as every other value field.
+
+func TestSetNodeProperty_Vector3ArrayAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		PropertyName:      "vertices",
+		Vector3ArrayValue: []Vector3{{X: 1.5, Y: 2.5, Z: 3.5}},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone vector3_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone vector3_array_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_EmptyVector3ArrayIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		PropertyName:      "vertices",
+		Vector3ArrayValue: []Vector3{},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with an explicitly empty vector3_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected an explicitly empty vector3_array_value as if it were unset: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsVector3ArrayPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:         "main.tscn",
+		PropertyName:      "vertices",
+		Vector3ArrayValue: []Vector3{{X: 1, Y: 2, Z: 3}},
+		Vector3Value:      &Vector3{X: 1, Y: 2, Z: 3},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with vector3_array_value and vector3_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

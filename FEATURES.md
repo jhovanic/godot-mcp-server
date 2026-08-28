@@ -100,7 +100,10 @@ changelog.
               scalar; genuinely common for 2D collision/shape data (`Polygon2D.polygon`,
               `CollisionPolygon2D.polygon`, `Line2D.points`)
         - [x] PackedColorArray — nested `{r, g, b, a}` elements
-        - [ ] PackedVector3Array — nested `{x, y, z}` elements
+        - [x] PackedVector3Array — nested `{x, y, z}` elements. Note: of the two built-in Node
+              targets, CPUParticles3D's emission_points/emission_normals are both
+              usage=0 (runtime-only, never persisted) per ClassDB — NavigationObstacle3D.vertices
+              is the only one that actually saves
         - [ ] PackedByteArray — raw binary (e.g. `TileMapLayer.tile_map_data`); likely out of
               scope, since it's internal engine-packed data rather than something meant for
               external hand-editing
