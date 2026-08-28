@@ -164,6 +164,17 @@ func TestSetScriptExport_ValueTypesAloneAreValidAndRollBack(t *testing.T) {
 	v2 := Vector2{X: 1, Y: 2}
 	v3 := Vector3{X: 1, Y: 2, Z: 3}
 	col := Color{R: 1, G: 0, B: 0, A: 1}
+	v2i := Vector2i{X: 1, Y: 2}
+	v3i := Vector3i{X: 1, Y: 2, Z: 3}
+	q := Quaternion{X: 0, Y: 0, Z: 0, W: 1}
+	r2 := Rect2{Position: Vector2{X: 1, Y: 2}, Size: Vector2{X: 3, Y: 4}}
+	r2i := Rect2i{Position: Vector2i{X: 1, Y: 2}, Size: Vector2i{X: 3, Y: 4}}
+	pl := Plane{X: 0, Y: 1, Z: 0, D: 5}
+	box := AABB{Position: Vector3{X: 0, Y: 0, Z: 0}, Size: Vector3{X: 1, Y: 1, Z: 1}}
+	basis := Basis{X: Vector3{X: 1, Y: 0, Z: 0}, Y: Vector3{X: 0, Y: 1, Z: 0}, Z: Vector3{X: 0, Y: 0, Z: 1}}
+	t2d := Transform2D{X: Vector2{X: 1, Y: 0}, Y: Vector2{X: 0, Y: 1}, Origin: Vector2{X: 0, Y: 0}}
+	t3d := Transform3D{Basis: basis, Origin: Vector3{X: 0, Y: 0, Z: 0}}
+	np := "../Target"
 
 	tests := []struct {
 		name   string
@@ -176,6 +187,17 @@ func TestSetScriptExport_ValueTypesAloneAreValidAndRollBack(t *testing.T) {
 		{"Vector2Value", SetScriptExportParams{Vector2Value: &v2}},
 		{"Vector3Value", SetScriptExportParams{Vector3Value: &v3}},
 		{"ColorValue", SetScriptExportParams{ColorValue: &col}},
+		{"Vector2iValue", SetScriptExportParams{Vector2iValue: &v2i}},
+		{"Vector3iValue", SetScriptExportParams{Vector3iValue: &v3i}},
+		{"QuaternionValue", SetScriptExportParams{QuaternionValue: &q}},
+		{"Rect2Value", SetScriptExportParams{Rect2Value: &r2}},
+		{"Rect2iValue", SetScriptExportParams{Rect2iValue: &r2i}},
+		{"PlaneValue", SetScriptExportParams{PlaneValue: &pl}},
+		{"AABBValue", SetScriptExportParams{AABBValue: &box}},
+		{"BasisValue", SetScriptExportParams{BasisValue: &basis}},
+		{"Transform2DValue", SetScriptExportParams{Transform2DValue: &t2d}},
+		{"Transform3DValue", SetScriptExportParams{Transform3DValue: &t3d}},
+		{"NodePathValue", SetScriptExportParams{NodePathValue: &np}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

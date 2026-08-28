@@ -2026,6 +2026,53 @@ func TestSetScriptExport_Success(t *testing.T) {
 	}
 }
 
+// TestSetScriptExport_PassesThroughCompoundValueType proves a nested
+// struct value type (not just a scalar) survives the MCP JSON round trip
+// intact — Rect2's position/size sub-objects are the representative case
+// among the 11 value types added after set_script_export's initial ship.
+func TestSetScriptExport_PassesThroughCompoundValueType(t *testing.T) {
+	setter := &fakeScriptExportSetter{
+		result: &headless.SetScriptExportResult{
+			Path:   "res://player.gd",
+			Name:   "bounds",
+			Action: "inserted",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptExport = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_export",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"name":        "bounds",
+			"rect2_value": map[string]any{
+				"position": map[string]any{"x": 1.0, "y": 2.0},
+				"size":     map[string]any{"x": 3.0, "y": 4.0},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Rect2Value
+	want := headless.Rect2{Position: headless.Vector2{X: 1, Y: 2}, Size: headless.Vector2{X: 3, Y: 4}}
+	if got == nil || *got != want {
+		t.Fatalf("handler did not pass through rect2_value, got %+v", got)
+	}
+}
+
 func TestSetScriptExport_Error(t *testing.T) {
 	wantErr := errors.New("boom: no such script")
 	setter := &fakeScriptExportSetter{err: wantErr}

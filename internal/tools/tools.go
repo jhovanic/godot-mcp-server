@@ -341,13 +341,14 @@ func registerSetScriptExport(server *mcp.Server, deps Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "set_script_export",
 		Description: "Write. Adds or modifies a single top-level @export var declaration " +
-			"(string, integer, floating-point, boolean, Vector2, Vector3, or Color default) in " +
-			"an existing .gd script under the configured project root, then verifies the " +
-			"result still parses and saves it — never touches a function body or any other " +
-			"executable logic. Fails, without modifying the script, if the script doesn't " +
-			"exist, name isn't a valid identifier, or the edited script fails to parse. Only " +
-			"ever available when the server was started with -mode read-write or -mode " +
-			"advanced.",
+			"(string, integer, floating-point, boolean, Vector2, Vector3, Color, Vector2i, " +
+			"Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis, Transform2D, Transform3D, " +
+			"or NodePath default) in an existing .gd script under the configured project root, " +
+			"then verifies the result still parses and saves it — never touches a function " +
+			"body or any other executable logic. Fails, without modifying the script, if the " +
+			"script doesn't exist, name isn't a valid identifier, or the edited script fails " +
+			"to parse. Only ever available when the server was started with -mode read-write " +
+			"or -mode advanced.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetScriptExportParams) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
 		result, err := deps.ScriptExport.SetScriptExport(ctx, args)

@@ -135,6 +135,17 @@ func TestRenderScriptExportLiteral(t *testing.T) {
 	v2 := Vector2{X: 1, Y: 2}
 	v3 := Vector3{X: 1, Y: 2, Z: 3}
 	c := Color{R: 1, G: 0, B: 0, A: 1}
+	v2i := Vector2i{X: 1, Y: 2}
+	v3i := Vector3i{X: 1, Y: 2, Z: 3}
+	q := Quaternion{X: 0, Y: 0, Z: 0, W: 1}
+	r2 := Rect2{Position: Vector2{X: 1, Y: 2}, Size: Vector2{X: 3, Y: 4}}
+	r2i := Rect2i{Position: Vector2i{X: 1, Y: 2}, Size: Vector2i{X: 3, Y: 4}}
+	pl := Plane{X: 0, Y: 1, Z: 0, D: 5}
+	box := AABB{Position: Vector3{X: 0, Y: 0, Z: 0}, Size: Vector3{X: 1, Y: 1, Z: 1}}
+	basis := Basis{X: Vector3{X: 1, Y: 0, Z: 0}, Y: Vector3{X: 0, Y: 1, Z: 0}, Z: Vector3{X: 0, Y: 0, Z: 1}}
+	t2d := Transform2D{X: Vector2{X: 1, Y: 0}, Y: Vector2{X: 0, Y: 1}, Origin: Vector2{X: 0, Y: 0}}
+	t3d := Transform3D{Basis: basis, Origin: Vector3{X: 0, Y: 0, Z: 0}}
+	np := "../Target"
 
 	tests := []struct {
 		name        string
@@ -150,6 +161,17 @@ func TestRenderScriptExportLiteral(t *testing.T) {
 		{"vector2", SetScriptExportParams{Vector2Value: &v2}, "Vector2", "Vector2(1.0, 2.0)"},
 		{"vector3", SetScriptExportParams{Vector3Value: &v3}, "Vector3", "Vector3(1.0, 2.0, 3.0)"},
 		{"color", SetScriptExportParams{ColorValue: &c}, "Color", "Color(1.0, 0.0, 0.0, 1.0)"},
+		{"vector2i", SetScriptExportParams{Vector2iValue: &v2i}, "Vector2i", "Vector2i(1, 2)"},
+		{"vector3i", SetScriptExportParams{Vector3iValue: &v3i}, "Vector3i", "Vector3i(1, 2, 3)"},
+		{"quaternion", SetScriptExportParams{QuaternionValue: &q}, "Quaternion", "Quaternion(0.0, 0.0, 0.0, 1.0)"},
+		{"rect2", SetScriptExportParams{Rect2Value: &r2}, "Rect2", "Rect2(1.0, 2.0, 3.0, 4.0)"},
+		{"rect2i", SetScriptExportParams{Rect2iValue: &r2i}, "Rect2i", "Rect2i(1, 2, 3, 4)"},
+		{"plane", SetScriptExportParams{PlaneValue: &pl}, "Plane", "Plane(0.0, 1.0, 0.0, 5.0)"},
+		{"aabb", SetScriptExportParams{AABBValue: &box}, "AABB", "AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, 1.0))"},
+		{"basis", SetScriptExportParams{BasisValue: &basis}, "Basis", "Basis(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0))"},
+		{"transform2d", SetScriptExportParams{Transform2DValue: &t2d}, "Transform2D", "Transform2D(Vector2(1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, 0.0))"},
+		{"transform3d", SetScriptExportParams{Transform3DValue: &t3d}, "Transform3D", "Transform3D(Basis(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)), Vector3(0.0, 0.0, 0.0))"},
+		{"node_path", SetScriptExportParams{NodePathValue: &np}, "NodePath", `NodePath("../Target")`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

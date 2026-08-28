@@ -138,14 +138,23 @@ func (c *Client) writeScriptChecked(ctx context.Context, absPath, resPath string
 
 // SetScriptExportParams are the parameters for the set_script_export
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
-// Vector2Value, Vector3Value, ColorValue must be set — same one-of
-// discipline as SetNodePropertyParams, reusing its Vector2/Vector3/Color
-// types directly. v1 is scoped to primitives plus Vector2/Vector3/Color,
-// mirroring set_node_property's own "primitives, then the three simplest
-// structs" phase-in — every other value type needs its own
-// GDScript-literal-rendering rule (e.g. a preload() call for a Resource
-// default), not just another scalar case; see FEATURES.md for what's
-// deferred and why.
+// Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
+// QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
+// BasisValue, Transform2DValue, Transform3DValue, NodePathValue must be
+// set — same one-of discipline as SetNodePropertyParams, reusing its
+// Vector2/Vector3/Color/Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/
+// AABB/Basis/Transform2D/Transform3D types directly. This is the complete
+// set of fixed-arity value types (every one SetNodeProperty itself
+// supports except arrays and Resource references) — each renders to a
+// GDScript literal using the exact constructor syntax already validated
+// against a real Godot build for set_node_property's own GDScript side
+// (see scripts/godot_operations.gd's matching branches), so there was no
+// new design question for any of these, just the render-as-literal case
+// FEATURES.md already anticipated. Packed/typed arrays and Resource-typed
+// export defaults remain deferred — those need their own
+// literal-rendering design (e.g. a preload() call for a Resource default),
+// not just another scalar case; see FEATURES.md for what's deferred and
+// why.
 type SetScriptExportParams struct {
 	// ScriptPath is the .gd path, relative to the project root. Validated
 	// against Root before use. The script must already exist — this
@@ -154,13 +163,26 @@ type SetScriptExportParams struct {
 	// Name is the exported variable's name.
 	Name string `json:"name" jsonschema:"the exported variable's name, a valid GDScript identifier"`
 
-	StringValue  *string  `json:"string_value,omitempty" jsonschema:"set the @export var's default to this string value; exactly one of the *_value fields must be set"`
-	IntValue     *int64   `json:"int_value,omitempty" jsonschema:"set the @export var's default to this integer value; exactly one of the *_value fields must be set"`
-	FloatValue   *float64 `json:"float_value,omitempty" jsonschema:"set the @export var's default to this floating-point value; exactly one of the *_value fields must be set"`
-	BoolValue    *bool    `json:"bool_value,omitempty" jsonschema:"set the @export var's default to this boolean value; exactly one of the *_value fields must be set"`
-	Vector2Value *Vector2 `json:"vector2_value,omitempty" jsonschema:"set the @export var's default to this Vector2 value; exactly one of the *_value fields must be set"`
-	Vector3Value *Vector3 `json:"vector3_value,omitempty" jsonschema:"set the @export var's default to this Vector3 value; exactly one of the *_value fields must be set"`
-	ColorValue   *Color   `json:"color_value,omitempty" jsonschema:"set the @export var's default to this Color value; exactly one of the *_value fields must be set"`
+	StringValue      *string      `json:"string_value,omitempty" jsonschema:"set the @export var's default to this string value; exactly one of the *_value fields must be set"`
+	IntValue         *int64       `json:"int_value,omitempty" jsonschema:"set the @export var's default to this integer value; exactly one of the *_value fields must be set"`
+	FloatValue       *float64     `json:"float_value,omitempty" jsonschema:"set the @export var's default to this floating-point value; exactly one of the *_value fields must be set"`
+	BoolValue        *bool        `json:"bool_value,omitempty" jsonschema:"set the @export var's default to this boolean value; exactly one of the *_value fields must be set"`
+	Vector2Value     *Vector2     `json:"vector2_value,omitempty" jsonschema:"set the @export var's default to this Vector2 value; exactly one of the *_value fields must be set"`
+	Vector3Value     *Vector3     `json:"vector3_value,omitempty" jsonschema:"set the @export var's default to this Vector3 value; exactly one of the *_value fields must be set"`
+	ColorValue       *Color       `json:"color_value,omitempty" jsonschema:"set the @export var's default to this Color value; exactly one of the *_value fields must be set"`
+	Vector2iValue    *Vector2i    `json:"vector2i_value,omitempty" jsonschema:"set the @export var's default to this Vector2i value; exactly one of the *_value fields must be set"`
+	Vector3iValue    *Vector3i    `json:"vector3i_value,omitempty" jsonschema:"set the @export var's default to this Vector3i value; exactly one of the *_value fields must be set"`
+	QuaternionValue  *Quaternion  `json:"quaternion_value,omitempty" jsonschema:"set the @export var's default to this Quaternion value; exactly one of the *_value fields must be set"`
+	Rect2Value       *Rect2       `json:"rect2_value,omitempty" jsonschema:"set the @export var's default to this Rect2 value; exactly one of the *_value fields must be set"`
+	Rect2iValue      *Rect2i      `json:"rect2i_value,omitempty" jsonschema:"set the @export var's default to this Rect2i value; exactly one of the *_value fields must be set"`
+	PlaneValue       *Plane       `json:"plane_value,omitempty" jsonschema:"set the @export var's default to this Plane value; exactly one of the *_value fields must be set"`
+	AABBValue        *AABB        `json:"aabb_value,omitempty" jsonschema:"set the @export var's default to this AABB value; exactly one of the *_value fields must be set"`
+	BasisValue       *Basis       `json:"basis_value,omitempty" jsonschema:"set the @export var's default to this Basis value; exactly one of the *_value fields must be set"`
+	Transform2DValue *Transform2D `json:"transform2d_value,omitempty" jsonschema:"set the @export var's default to this Transform2D value; exactly one of the *_value fields must be set"`
+	Transform3DValue *Transform3D `json:"transform3d_value,omitempty" jsonschema:"set the @export var's default to this Transform3D value; exactly one of the *_value fields must be set"`
+	// NodePathValue addresses another node in the same, already-loaded
+	// scene tree — this is not a filesystem path.
+	NodePathValue *string `json:"node_path_value,omitempty" jsonschema:"set the @export var's default to this NodePath value (e.g. \"../Target\"); exactly one of the *_value fields must be set"`
 }
 
 // SetScriptExportResult confirms a completed export-declaration write.
@@ -199,8 +221,48 @@ func renderScriptExportLiteral(params SetScriptExportParams) (typeName, literal 
 	case params.ColorValue != nil:
 		v := params.ColorValue
 		return "Color", fmt.Sprintf("Color(%s, %s, %s, %s)", formatGDScriptFloat(v.R), formatGDScriptFloat(v.G), formatGDScriptFloat(v.B), formatGDScriptFloat(v.A))
+	case params.Vector2iValue != nil:
+		v := params.Vector2iValue
+		return "Vector2i", fmt.Sprintf("Vector2i(%d, %d)", v.X, v.Y)
+	case params.Vector3iValue != nil:
+		v := params.Vector3iValue
+		return "Vector3i", fmt.Sprintf("Vector3i(%d, %d, %d)", v.X, v.Y, v.Z)
+	case params.QuaternionValue != nil:
+		v := params.QuaternionValue
+		return "Quaternion", fmt.Sprintf("Quaternion(%s, %s, %s, %s)", formatGDScriptFloat(v.X), formatGDScriptFloat(v.Y), formatGDScriptFloat(v.Z), formatGDScriptFloat(v.W))
+	case params.Rect2Value != nil:
+		v := params.Rect2Value
+		return "Rect2", fmt.Sprintf("Rect2(%s, %s, %s, %s)", formatGDScriptFloat(v.Position.X), formatGDScriptFloat(v.Position.Y), formatGDScriptFloat(v.Size.X), formatGDScriptFloat(v.Size.Y))
+	case params.Rect2iValue != nil:
+		v := params.Rect2iValue
+		return "Rect2i", fmt.Sprintf("Rect2i(%d, %d, %d, %d)", v.Position.X, v.Position.Y, v.Size.X, v.Size.Y)
+	case params.PlaneValue != nil:
+		v := params.PlaneValue
+		return "Plane", fmt.Sprintf("Plane(%s, %s, %s, %s)", formatGDScriptFloat(v.X), formatGDScriptFloat(v.Y), formatGDScriptFloat(v.Z), formatGDScriptFloat(v.D))
+	case params.AABBValue != nil:
+		v := params.AABBValue
+		return "AABB", fmt.Sprintf("AABB(%s, %s)", formatVector3Literal(v.Position), formatVector3Literal(v.Size))
+	case params.BasisValue != nil:
+		v := params.BasisValue
+		return "Basis", fmt.Sprintf("Basis(%s, %s, %s)", formatVector3Literal(v.X), formatVector3Literal(v.Y), formatVector3Literal(v.Z))
+	case params.Transform2DValue != nil:
+		v := params.Transform2DValue
+		return "Transform2D", fmt.Sprintf("Transform2D(%s, %s, %s)", formatVector2Literal(v.X), formatVector2Literal(v.Y), formatVector2Literal(v.Origin))
+	case params.Transform3DValue != nil:
+		v := params.Transform3DValue
+		return "Transform3D", fmt.Sprintf("Transform3D(Basis(%s, %s, %s), %s)", formatVector3Literal(v.Basis.X), formatVector3Literal(v.Basis.Y), formatVector3Literal(v.Basis.Z), formatVector3Literal(v.Origin))
+	case params.NodePathValue != nil:
+		return "NodePath", fmt.Sprintf("NodePath(%s)", strconv.Quote(*params.NodePathValue))
 	}
 	return "", ""
+}
+
+func formatVector2Literal(v Vector2) string {
+	return fmt.Sprintf("Vector2(%s, %s)", formatGDScriptFloat(v.X), formatGDScriptFloat(v.Y))
+}
+
+func formatVector3Literal(v Vector3) string {
+	return fmt.Sprintf("Vector3(%s, %s, %s)", formatGDScriptFloat(v.X), formatGDScriptFloat(v.Y), formatGDScriptFloat(v.Z))
 }
 
 // spliceExportDeclaration adds or modifies a single top-level
@@ -294,13 +356,24 @@ func (c *Client) SetScriptExport(ctx context.Context, params SetScriptExportPara
 		params.Vector2Value != nil,
 		params.Vector3Value != nil,
 		params.ColorValue != nil,
+		params.Vector2iValue != nil,
+		params.Vector3iValue != nil,
+		params.QuaternionValue != nil,
+		params.Rect2Value != nil,
+		params.Rect2iValue != nil,
+		params.PlaneValue != nil,
+		params.AABBValue != nil,
+		params.BasisValue != nil,
+		params.Transform2DValue != nil,
+		params.Transform3DValue != nil,
+		params.NodePathValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_script_export: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_script_export: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value must be set, got %d", valuesSet)
 	}
 
 	info, err := os.Stat(absPath)

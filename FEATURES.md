@@ -225,10 +225,12 @@ changelog.
           tier. v1 value-type scope mirrors `set_node_property`'s own "primitives first" ordering:
         - [x] Primitives: string, int, float, bool
         - [x] Vector2, Vector3, Color
-        - [ ] Vector2i / Vector3i, Quaternion, Rect2 / Rect2i, Plane, AABB, Basis, Transform2D /
-              Transform3D, NodePath — deferred for the same reason `set_node_property` built these
-              after its first four: no new design question, just more render-as-GDScript-literal
-              cases to add one at a time once real usage asks for one
+        - [x] Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis, Transform2D,
+              Transform3D, NodePath — confirmed no new design question, as expected: each renders
+              to the exact GDScript constructor syntax already validated for `set_node_property`'s
+              own GDScript side (see `scripts/godot_operations.gd`'s matching branches), and all
+              11 were reverified as valid `@export` defaults against a real Godot 4.7.2 binary
+              before implementing
         - [ ] Packed/typed arrays and Resource-typed export defaults — deferred: an array or
               Resource default needs its own literal-rendering design (e.g. a `preload()` call for
               a Resource default), not just another scalar case

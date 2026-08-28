@@ -2279,6 +2279,75 @@ func TestSetScriptExport_RealGodot_ModifiesExistingDeclaration(t *testing.T) {
 	}
 }
 
+// TestSetScriptExport_RealGodot_RemainingValueTypesInsertSuccessfully
+// exercises the 11 value types deferred when set_script_export first
+// shipped (Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis/
+// Transform2D/Transform3D/NodePath) — each confirmed empirically to be a
+// valid @export default against a real Godot 4.7.2 binary before this
+// test was written. Table-driven since the shape of the check (insert,
+// read the file back, look for the rendered literal) is identical across
+// all eleven.
+func TestSetScriptExport_RealGodot_RemainingValueTypesInsertSuccessfully(t *testing.T) {
+	basis := Basis{X: Vector3{X: 1}, Y: Vector3{Y: 1}, Z: Vector3{Z: 1}}
+	nodePath := "../Target"
+
+	tests := []struct {
+		name string
+		set  func(*SetScriptExportParams)
+		want string
+	}{
+		{"Vector2iValue", func(p *SetScriptExportParams) { p.Vector2iValue = &Vector2i{X: 1, Y: 2} }, "Vector2i(1, 2)"},
+		{"Vector3iValue", func(p *SetScriptExportParams) { p.Vector3iValue = &Vector3i{X: 1, Y: 2, Z: 3} }, "Vector3i(1, 2, 3)"},
+		{"QuaternionValue", func(p *SetScriptExportParams) { p.QuaternionValue = &Quaternion{W: 1} }, "Quaternion(0.0, 0.0, 0.0, 1.0)"},
+		{"Rect2Value", func(p *SetScriptExportParams) {
+			p.Rect2Value = &Rect2{Position: Vector2{X: 1, Y: 2}, Size: Vector2{X: 3, Y: 4}}
+		}, "Rect2(1.0, 2.0, 3.0, 4.0)"},
+		{"Rect2iValue", func(p *SetScriptExportParams) {
+			p.Rect2iValue = &Rect2i{Position: Vector2i{X: 1, Y: 2}, Size: Vector2i{X: 3, Y: 4}}
+		}, "Rect2i(1, 2, 3, 4)"},
+		{"PlaneValue", func(p *SetScriptExportParams) { p.PlaneValue = &Plane{Y: 1, D: 5} }, "Plane(0.0, 1.0, 0.0, 5.0)"},
+		{"AABBValue", func(p *SetScriptExportParams) {
+			p.AABBValue = &AABB{Size: Vector3{X: 1, Y: 1, Z: 1}}
+		}, "AABB(Vector3(0.0, 0.0, 0.0), Vector3(1.0, 1.0, 1.0))"},
+		{"BasisValue", func(p *SetScriptExportParams) { p.BasisValue = &basis }, "Basis(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0))"},
+		{"Transform2DValue", func(p *SetScriptExportParams) {
+			p.Transform2DValue = &Transform2D{X: Vector2{X: 1}, Y: Vector2{Y: 1}}
+		}, "Transform2D(Vector2(1.0, 0.0), Vector2(0.0, 1.0), Vector2(0.0, 0.0))"},
+		{"Transform3DValue", func(p *SetScriptExportParams) {
+			p.Transform3DValue = &Transform3D{Basis: basis}
+		}, "Transform3D(Basis(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)), Vector3(0.0, 0.0, 0.0))"},
+		{"NodePathValue", func(p *SetScriptExportParams) { p.NodePathValue = &nodePath }, `NodePath("../Target")`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := scriptEditFixtureClient(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			params := SetScriptExportParams{ScriptPath: "player.gd", Name: "test_val"}
+			tt.set(&params)
+
+			result, err := c.SetScriptExport(ctx, params)
+			if err != nil {
+				t.Fatalf("SetScriptExport against a real Godot binary: %v", err)
+			}
+			if result.Action != "inserted" {
+				t.Errorf("Action = %q, want %q", result.Action, "inserted")
+			}
+
+			data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+			if err != nil {
+				t.Fatalf("reading saved script: %v", err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Errorf("saved script missing expected declaration %q: %s", tt.want, data)
+			}
+		})
+	}
+}
+
 // TestSetScriptExport_RealGodot_RollsBackOnInvalidResult uses a name that
 // passes Go's identifier regex but is a GDScript reserved word, so only
 // the real parser (via checkScriptParses) catches it.
