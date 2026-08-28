@@ -142,18 +142,19 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 ## Transform3D/NodePath/PackedStringArray/PackedInt32Array/
 ## PackedFloat32Array/PackedVector2Array/PackedColorArray/
 ## PackedVector3Array/Array[NodePath]/Resource/Array[String]/Array[int]/
-## Array[float]/Array[Vector2]/Array[Color]/Array[Vector3] — the caller
-## sends exactly one of string_value/int_value/float_value/bool_value/
-## vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/
-## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/
-## basis_value/transform2d_value/transform3d_value/node_path_value/
-## string_array_value/int_array_value/float_array_value/
-## vector2_array_value/color_array_value/vector3_array_value/
-## node_path_array_value/resource_value/typed_string_array_value/
-## typed_int_array_value/typed_float_array_value/typed_vector2_array_value/
-## typed_color_array_value/typed_vector3_array_value) on one node addressed
-## by node_path (relative to the scene root; empty string means the root
-## itself), then re-packs and saves the scene.
+## Array[float]/Array[Vector2]/Array[Color]/Array[Vector3]/Array[T] where T
+## is a Resource subclass — the caller sends exactly one of string_value/
+## int_value/float_value/bool_value/vector2_value/vector3_value/
+## color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/
+## rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/
+## transform3d_value/node_path_value/string_array_value/int_array_value/
+## float_array_value/vector2_array_value/color_array_value/
+## vector3_array_value/node_path_array_value/resource_value/
+## typed_string_array_value/typed_int_array_value/typed_float_array_value/
+## typed_vector2_array_value/typed_color_array_value/
+## typed_vector3_array_value/typed_resource_array_value) on one node
+## addressed by node_path (relative to the scene root; empty string means
+## the root itself), then re-packs and saves the scene.
 ##
 ## property_name "script" is refused unconditionally, regardless of which
 ## *_value field is sent: assigning a Script is code execution, not a data
@@ -386,8 +387,31 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 			tv3a_list.append(Vector3(float(tv3a_item.get("x", 0.0)), float(tv3a_item.get("y", 0.0)), float(tv3a_item.get("z", 0.0))))
 		value = tv3a_list
 		values_set += 1
+	# typed_resource_array_value can only load each element here — building
+	# the genuinely-typed Array[T] it needs to become requires knowing the
+	# target property's declared element class, which isn't known until the
+	# target node is resolved further down. `value` holds a plain Array of
+	# loaded Resources until then; is_typed_resource_array flags that this
+	# plain Array still needs that conversion before target.set().
+	var is_typed_resource_array := false
+	if params.get("typed_resource_array_value") != null:
+		var tra_paths: Array = params["typed_resource_array_value"]
+		var tra_loaded: Array = []
+		for tra_path in tra_paths:
+			var tra_path_str: String = str(tra_path)
+			if not tra_path_str.begins_with("res://"):
+				return _err("set_node_property: typed_resource_array_value must be a res:// path")
+			if not ResourceLoader.exists(tra_path_str):
+				return _err("set_node_property: no resource at %s" % tra_path_str)
+			var tra_resource: Resource = load(tra_path_str)
+			if tra_resource == null:
+				return _err("set_node_property: failed to load resource at %s" % tra_path_str)
+			tra_loaded.append(tra_resource)
+		value = tra_loaded
+		is_typed_resource_array = true
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value/resource_value/typed_string_array_value/typed_int_array_value/typed_float_array_value/typed_vector2_array_value/typed_color_array_value/typed_vector3_array_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value/resource_value/typed_string_array_value/typed_int_array_value/typed_float_array_value/typed_vector2_array_value/typed_color_array_value/typed_vector3_array_value/typed_resource_array_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)
@@ -424,6 +448,57 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 				root.free()
 				return _err("set_node_property: resource of class %s is not compatible with %s (expects %s)" % [value_class, property_name, expected_class])
 			break
+
+	# is_typed_resource_array: `value` is still the plain Array of loaded
+	# Resources the early parsing block built — it has to become a
+	# genuinely-typed Array[T] before target.set() (see
+	# TypedResourceArrayValue's doc comment on SetNodePropertyParams for
+	# why: reusing an untyped Array here would risk the same Array-vs-wrong-
+	# Variant-type crash Array[String] had). Unlike the scalar Resource
+	# check above, per-element class compatibility doesn't need a
+	# hand-rolled ClassDB check: Godot's own TypedArray container enforces
+	# it (with proper subclass tolerance) the moment an incompatible
+	# element is appended — confirmed empirically: the append is silently
+	# rejected (array size doesn't grow) rather than raising a catchable
+	# script error, so each append's size is checked to detect it.
+	if is_typed_resource_array:
+		var tra_expected_class := ""
+		var tra_property_found := false
+		for prop in target.get_property_list():
+			if prop["name"] != property_name:
+				continue
+			tra_property_found = true
+			if prop["type"] != TYPE_ARRAY:
+				root.free()
+				return _err("set_node_property: %s is not an array property" % property_name)
+			# A typed array's element class lives in hint_string, not
+			# class_name (which is empty for array-typed properties). For a
+			# Resource-subclass element it's the compound
+			# "<TYPE_OBJECT>/<PROPERTY_HINT_RESOURCE_TYPE>:<ClassName>"
+			# encoding (e.g. "24/17:Texture2D") — confirmed empirically,
+			# and different from the plain class-name form Array[NodePath]
+			# uses, since NodePath is a builtin Variant type, not an
+			# Object/Resource one.
+			var tra_hint_string: String = prop.get("hint_string", "")
+			tra_expected_class = tra_hint_string.split(":")[-1] if ":" in tra_hint_string else tra_hint_string
+			break
+		if not tra_property_found:
+			root.free()
+			return _err("set_node_property: no property named %s" % property_name)
+		if tra_expected_class == "" or not ClassDB.class_exists(tra_expected_class) or not ClassDB.is_parent_class(tra_expected_class, "Resource"):
+			root.free()
+			return _err("set_node_property: %s is not a typed array of a Resource subclass" % property_name)
+
+		var tra_typed_array := Array([], TYPE_OBJECT, StringName(tra_expected_class), null)
+		var tra_loaded_elements: Array = value
+		for i in tra_loaded_elements.size():
+			var tra_element: Resource = tra_loaded_elements[i]
+			tra_typed_array.append(tra_element)
+			if tra_typed_array.size() != i + 1:
+				var tra_element_class: String = tra_element.get_class()
+				root.free()
+				return _err("set_node_property: element %d (class %s) is not compatible with %s's declared element type %s" % [i, tra_element_class, property_name, tra_expected_class])
+		value = tra_typed_array
 
 	var previous: Variant = target.get(property_name)
 	target.set(property_name, value)

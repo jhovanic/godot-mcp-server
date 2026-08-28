@@ -1855,6 +1855,47 @@ func TestSetNodeProperty_TypedArrayValuesSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_TypedResourceArrayValueSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "IntGrid",
+			PropertyName:  "typed_textures",
+			PreviousValue: "[]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":                 "main.tscn",
+			"node_path":                  "IntGrid",
+			"property_name":              "typed_textures",
+			"typed_resource_array_value": []any{"a.tres", "b.tres"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.TypedResourceArrayValue
+	if len(got) != 2 || got[0] != "a.tres" || got[1] != "b.tres" {
+		t.Fatalf("handler did not pass through typed_resource_array_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

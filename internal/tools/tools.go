@@ -267,21 +267,24 @@ func registerSetNodeProperty(server *mcp.Server, deps Deps) {
 			"Vector2, Vector3, Color, Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, " +
 			"AABB, Basis, Transform2D, Transform3D, NodePath, a PackedStringArray, a " +
 			"PackedInt32Array, a PackedFloat32Array, a PackedVector2Array, a PackedColorArray, " +
-			"a PackedVector3Array, a Resource loaded from an existing project file, or a typed " +
-			"Array[T] of NodePath/String/int/float/Vector2/Color/Vector3 elements — exactly " +
-			"one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/" +
+			"a PackedVector3Array, a Resource loaded from an existing project file, a typed " +
+			"Array[T] of NodePath/String/int/float/Vector2/Color/Vector3 elements, or a typed " +
+			"Array[T] whose element type T is itself a Resource subclass (e.g. " +
+			"Array[Texture2D], each element a project file path) — exactly one of " +
+			"string_value/int_value/float_value/bool_value/vector2_value/vector3_value/" +
 			"color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/" +
 			"rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/" +
 			"transform3d_value/node_path_value/string_array_value/int_array_value/" +
 			"float_array_value/vector2_array_value/color_array_value/vector3_array_value/" +
 			"node_path_array_value/resource_value/typed_string_array_value/" +
 			"typed_int_array_value/typed_float_array_value/typed_vector2_array_value/" +
-			"typed_color_array_value/typed_vector3_array_value must be given) on one node in a " +
-			".tscn scene under the configured project root, then saves the scene. Fails, " +
-			"without modifying the scene, if the scene, node, or property doesn't exist, or if " +
-			"resource_value's resource class isn't compatible with the property's declared " +
-			"type. property_name \"script\" is always refused. Only ever available when the " +
-			"server was started with -mode read-write.",
+			"typed_color_array_value/typed_vector3_array_value/typed_resource_array_value " +
+			"must be given) on one node in a .tscn scene under the configured project root, " +
+			"then saves the scene. Fails, without modifying the scene, if the scene, node, or " +
+			"property doesn't exist, or if a resource_value/typed_resource_array_value " +
+			"element's class isn't compatible with the property's declared type. " +
+			"property_name \"script\" is always refused. Only ever available when the server " +
+			"was started with -mode read-write.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetNodePropertyParams) (*mcp.CallToolResult, any, error) {
 		start := time.Now()
 		result, err := deps.NodeProperty.SetNodeProperty(ctx, args)

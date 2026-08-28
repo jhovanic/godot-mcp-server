@@ -57,15 +57,16 @@ changelog.
       minimal diff (see `internal/headless.Client.SetNodeProperty`'s doc comment). Value types,
       roughly ordered from simplest to implement to most complex — which also tends to track how
       commonly each is actually needed on a node property, so this list doubles as a priority
-      order for what to build next. Decided (2026-08-27), then revised same day once the
-      `Array[T]`/`Packed*Array` split turned out to hide a real bug (see the `Array[String]` note
-      below), not just a missing nice-to-have: coverage now includes primitives, the fixed-arity
-      structs, the primitive/vector/color packed arrays, external resource-file references, and
-      every typed-`Array[T]` element type with an existing `Packed*Array` or scalar sibling
-      (`NodePath`/`String`/`int`/`float`/`Vector2`/`Color`/`Vector3`). The freeze still holds for
+      order for what to build next. Decided (2026-08-27), then revised twice the same day —
+      first once the `Array[T]`/`Packed*Array` split turned out to hide a real bug (see the
+      `Array[String]` note below), then again once `Array[Resource]`'s design questions turned
+      out to be answerable (see its own note below) rather than genuinely blocked: coverage now
+      includes primitives, the fixed-arity structs, the primitive/vector/color packed arrays,
+      external resource-file references, and every typed-`Array[T]` element type with an existing
+      `Packed*Array` or scalar sibling, including `Array[Resource]`. The freeze still holds for
       what's left below (`PackedByteArray`, `PackedInt64Array`/`PackedFloat64Array`/
-      `PackedVector4Array`, `Array[Resource]`) — those stay deliberately unimplemented until
-      actual tool usage shows a property that needs one, not built ahead of demand:
+      `PackedVector4Array`) — those stay deliberately unimplemented until actual tool usage shows
+      a property that needs one, not built ahead of demand:
     - [x] Primitives: string, int, float, bool (int also covers Godot's int-backed enums, since
           `Object.set()` takes the raw int either way — no separate enum type needed)
     - [x] Vector2 (2D position, scale, size, ...)
@@ -146,15 +147,30 @@ changelog.
               elements
         - [x] `Array[int]`, `Array[float]`, `Array[Vector2]`, `Array[Color]`, `Array[Vector3]` —
               same shape as `Array[String]`/`Array[NodePath]` above, no new design questions
-        - [ ] `Array[Resource]` holding loaded resource references — no longer blocked on an
-              undecided resource-reference conversation (see "Resource / sub-resource references"
-              below, now settled for the scalar case), but its type-check-before-set needs new,
-              unverified introspection: a typed array's declared element class lives in
-              `hint_string` on a `PROPERTY_HINT_ARRAY_TYPE` property-list entry (confirmed via
-              ClassDB probe: plain class name, e.g. `"NodePath"` — not the `"24/17:ClassName"`
-              encoding a scalar `Resource`-typed property uses), a different code path from
-              `ResourceValue`'s `class_name`-based check, not yet verified end-to-end against a
-              real build
+        - [x] `Array[T]` where `T` is a Resource subclass (e.g. `Array[Texture2D]`) — field
+              `TypedResourceArrayValue`/`typed_resource_array_value`, each element a
+              project-relative path resolved through `Root.Resolve` exactly like `ResourceValue`,
+              just per element. This one needed genuinely new machinery, not just another
+              hand-written `Array[T] = []` branch, and an earlier note here (a typed array's
+              element class lives in `hint_string` as a *plain class name*) turned out to be
+              wrong for this case — that was only verified against `Array[NodePath]`, a builtin
+              Variant element type. For a Resource element, `hint_string` uses the *compound*
+              `"<TYPE_OBJECT>/<PROPERTY_HINT_RESOURCE_TYPE>:<ClassName>"` encoding (e.g.
+              `"24/17:Texture2D"`, confirmed via ClassDB probe against a real build) — the class
+              name has to be parsed out of the part after the `:`. Godot also doesn't expose
+              `Array.set_typed()` to GDScript for building a runtime-typed array dynamically (the
+              element class isn't known until the target property is inspected); the working
+              mechanism is the 4-argument constructor, `Array([], TYPE_OBJECT,
+              StringName(expected_class), null)`, also confirmed empirically. One thing that
+              turned out simpler than expected: once the array is properly typed this way, Godot's
+              own `TypedArray` container enforces per-element class compatibility (with subclass
+              tolerance) on `append()` — no hand-rolled `ClassDB.is_parent_class` check needed the
+              way the scalar `ResourceValue` case required, since `Object.set()` alone doesn't
+              enforce that. The one wrinkle: a rejected `append()` isn't a catchable script error,
+              just a silent no-op (plus a stderr `ERROR` print), so each append's array size is
+              checked to detect and cleanly report it. No built-in Node target exists here either
+              (reverified via ClassDB), so `custom_props_holder.gd`'s `typed_textures:
+              Array[Texture2D]` is the real-Godot test target.
     - [x] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — reopened
           path validation as expected, so needed its own maintainer conversation before starting,
           per CLAUDE.md; that conversation happened (2026-08-27) and settled scope for v1, all of

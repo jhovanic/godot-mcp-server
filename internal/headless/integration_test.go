@@ -300,6 +300,17 @@ func writeMinimalPNG(t *testing.T, path string) {
 // built-in target). custom_props_holder.gd's typed_strings/typed_ints/
 // typed_floats/typed_vector2s/typed_colors/typed_vector3s properties are
 // the real-Godot test target for all six.
+//
+// typed_textures (Array[Texture2D]) is the same story for
+// TypedResourceArrayValue: no built-in Node class exposes a typed array of
+// any Resource subclass either (also reverified via ClassDB). It's also the
+// property that established _op_set_node_property's expected-class lookup
+// for a Resource-element typed array: a script-exported Array[Texture2D]
+// reports hint=PROPERTY_HINT_TYPE_STRING with hint_string="24/17:Texture2D"
+// (the compound TYPE/HINT:ClassName encoding, not the plain class name
+// Array[NodePath] uses — that plain form only happens for a builtin-typed
+// element), so the class name has to be parsed out of the part after the
+// ":".
 func writeSetNodePropertyFixtureScene(t *testing.T, godotBin, projectDir string) {
 	t.Helper()
 	const script = `extends Node
@@ -312,6 +323,7 @@ func writeSetNodePropertyFixtureScene(t *testing.T, godotBin, projectDir string)
 @export var typed_vector2s: Array[Vector2] = []
 @export var typed_colors: Array[Color] = []
 @export var typed_vector3s: Array[Vector3] = []
+@export var typed_textures: Array[Texture2D] = []
 `
 	if err := os.WriteFile(filepath.Join(projectDir, "custom_props_holder.gd"), []byte(script), 0o644); err != nil {
 		t.Fatalf("writing fixture script: %v", err)
@@ -1867,6 +1879,159 @@ func TestSetNodeProperty_RealGodot_TypedArrays(t *testing.T) {
 				t.Errorf("saved scene missing expected %s property: %s", tt.property, data)
 			}
 		})
+	}
+}
+
+const placeholderTextureFixture = `[gd_resource type="PlaceholderTexture2D" format=3]
+
+[resource]
+size = Vector2(16, 16)
+`
+
+// TestSetNodeProperty_RealGodot_TypedResourceArrayValue exercises the
+// multi-element path: each element is loaded independently and appended
+// into a dynamically-typed Array[Texture2D] (see
+// writeSetNodePropertyFixtureScene's doc comment for why the class name
+// has to be parsed out of hint_string), producing real ext_resource
+// entries in the saved scene.
+func TestSetNodeProperty_RealGodot_TypedResourceArrayValue(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder_a.tres"), []byte(placeholderTextureFixture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder_b.tres"), []byte(placeholderTextureFixture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		NodePath:                "IntGrid",
+		PropertyName:            "typed_textures",
+		TypedResourceArrayValue: []string{"placeholder_a.tres", "placeholder_b.tres"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `path="res://placeholder_a.tres"`) || !strings.Contains(string(data), `path="res://placeholder_b.tres"`) {
+		t.Errorf("saved scene missing ext_resource entries for both placeholder textures: %s", data)
+	}
+	if !strings.Contains(string(data), "typed_textures = Array[Texture2D](") {
+		t.Errorf("saved scene missing typed_textures = Array[Texture2D](...) assignment: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_TypedResourceArrayValueTypeMismatch relies
+// on Godot's own TypedArray container validation (confirmed empirically:
+// appending an incompatible element is rejected at the engine level, with
+// subclass tolerance handled automatically) rather than a hand-rolled
+// ClassDB check like ResourceValue's scalar case needed.
+func TestSetNodeProperty_RealGodot_TypedResourceArrayValueTypeMismatch(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder_a.tres"), []byte(placeholderTextureFixture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const mismatchedResource = `[gd_resource type="Curve" format=3]
+
+[resource]
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "mismatched.tres"), []byte(mismatchedResource), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		NodePath:                "IntGrid",
+		PropertyName:            "typed_textures",
+		TypedResourceArrayValue: []string{"placeholder_a.tres", "mismatched.tres"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty appending a Curve into an Array[Texture2D]-typed property, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the type-mismatch rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_TypedResourceArrayValueMissingFile(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		NodePath:                "IntGrid",
+		PropertyName:            "typed_textures",
+		TypedResourceArrayValue: []string{"does_not_exist.tres"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a typed_resource_array_value element pointing at a nonexistent file, want error")
+	}
+}
+
+// TestSetNodeProperty_RealGodot_TypedResourceArrayValueEmpty mirrors the
+// other TestSetNodeProperty_RealGodot_Empty*Array tests: an empty typed
+// resource array is a legitimate value (clearing the property), verified
+// empirically to be omitted from the saved scene once cleared.
+func TestSetNodeProperty_RealGodot_TypedResourceArrayValueEmpty(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder_a.tres"), []byte(placeholderTextureFixture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		NodePath:                "IntGrid",
+		PropertyName:            "typed_textures",
+		TypedResourceArrayValue: []string{"placeholder_a.tres"},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		NodePath:                "IntGrid",
+		PropertyName:            "typed_textures",
+		TypedResourceArrayValue: []string{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), "typed_textures") {
+		t.Errorf("saved scene still has typed_textures after clearing it to an empty array: %s", data)
 	}
 }
 

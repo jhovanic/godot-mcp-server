@@ -1747,6 +1747,111 @@ func TestSetNodeProperty_RejectsTypedArrayValuePlusOtherValue(t *testing.T) {
 	}
 }
 
+// TypedResourceArrayValue reopens path validation per element, the same
+// way ResourceValue does for its single path — see FEATURES.md's
+// "Array[Resource]" note — and shares ResourceValue's "script" block, so
+// these are testable without a Godot binary the same way ResourceValue's
+// were.
+
+func TestSetNodeProperty_TypedResourceArrayValueAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		PropertyName:            "textures",
+		TypedResourceArrayValue: []string{"textures/a.png", "textures/b.png"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone typed_resource_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone typed_resource_array_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_TypedResourceArrayValueEmptyIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		PropertyName:            "textures",
+		TypedResourceArrayValue: []string{},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with an explicitly empty typed_resource_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected an explicitly empty typed_resource_array_value as if it were unset: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsTypedResourceArrayValuePlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	strVal := "not a resource array"
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		PropertyName:            "textures",
+		TypedResourceArrayValue: []string{"textures/a.png"},
+		StringValue:             &strVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with typed_resource_array_value and string_value both set, want error")
+	}
+}
+
+func TestSetNodeProperty_RejectsOutOfRootTypedResourceArrayValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		PropertyName:            "textures",
+		TypedResourceArrayValue: []string{"textures/a.png", "../outside.png"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a traversal element in typed_resource_array_value, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("SetNodeProperty error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsScriptPropertyWithTypedResourceArrayValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:               "main.tscn",
+		PropertyName:            "script",
+		TypedResourceArrayValue: []string{"player.gd"},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty on property_name \"script\" via typed_resource_array_value, want error")
+	}
+	if strings.Contains(err.Error(), "running godot") {
+		t.Fatalf("SetNodeProperty on \"script\" via typed_resource_array_value reached exec instead of being rejected up front: %v", err)
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

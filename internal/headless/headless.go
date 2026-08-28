@@ -642,6 +642,20 @@ type SetNodePropertyParams struct {
 	// distinction as the packed array fields above, and for the same reason
 	// uses "omitzero" rather than "omitempty" on its json tag.
 	TypedVector3ArrayValue []Vector3 `json:"typed_vector3_array_value,omitzero" jsonschema:"set property_name to this Array[Vector3] value (as opposed to vector3_array_value's PackedVector3Array); exactly one of the *_value fields must be set"`
+	// TypedResourceArrayValue sets a designer-typed Array[T] property whose
+	// element type T is itself a Resource subclass (e.g. Array[Texture2D],
+	// Array[Material]) — each element is a project-relative path to an
+	// existing resource file, validated against Root and loaded exactly
+	// like ResourceValue, just per element. Unlike the other Typed*ArrayValue
+	// fields above, the element class isn't known until the target property
+	// is inspected at runtime (it varies per property), so
+	// _op_set_node_property builds the typed array dynamically rather than
+	// with a hand-written `Array[T] = []` literal — see its doc comment.
+	// Has the same nil-vs-explicitly-empty distinction as the other array
+	// fields, and for the same reason uses "omitzero" rather than
+	// "omitempty" on its json tag. property_name "script" is refused
+	// unconditionally regardless of this field, same as ResourceValue.
+	TypedResourceArrayValue []string `json:"typed_resource_array_value,omitzero" jsonschema:"set property_name to this Array[T] value where T is a Resource subclass (e.g. Array[Texture2D]), each element a project-relative path to an existing resource file; exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -738,13 +752,14 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.TypedVector2ArrayValue != nil,
 		params.TypedColorArrayValue != nil,
 		params.TypedVector3ArrayValue != nil,
+		params.TypedResourceArrayValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value, resource_value, typed_string_array_value, typed_int_array_value, typed_float_array_value, typed_vector2_array_value, typed_color_array_value, typed_vector3_array_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value, resource_value, typed_string_array_value, typed_int_array_value, typed_float_array_value, typed_vector2_array_value, typed_color_array_value, typed_vector3_array_value, typed_resource_array_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -769,6 +784,28 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		}
 		rp := "res://" + filepath.ToSlash(relResourcePath)
 		resourceResPath = &rp
+	}
+
+	// TypedResourceArrayValue's elements each get the same Root.Resolve
+	// trust boundary as ResourceValue's single path, just per element.
+	// make(..., len(...)), not append onto a nil slice, so an explicitly
+	// empty input slice ([]string{}) resolves to a non-nil empty slice
+	// rather than collapsing back to nil — preserving the same
+	// nil-vs-explicitly-empty distinction the omitzero json tag depends on.
+	var typedResourceResPaths []string
+	if params.TypedResourceArrayValue != nil {
+		typedResourceResPaths = make([]string, len(params.TypedResourceArrayValue))
+		for i, p := range params.TypedResourceArrayValue {
+			absPath, err := c.Root.Resolve(p)
+			if err != nil {
+				return nil, fmt.Errorf("headless: set_node_property: typed_resource_array_value[%d]: %w", i, err)
+			}
+			relPath, err := filepath.Rel(c.Root.String(), absPath)
+			if err != nil {
+				return nil, fmt.Errorf("headless: set_node_property: computing project-relative resource path: %w", err)
+			}
+			typedResourceResPaths[i] = "res://" + filepath.ToSlash(relPath)
+		}
 	}
 
 	var result struct {
@@ -809,48 +846,50 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		NodePathArrayValue []string  `json:"node_path_array_value,omitzero"`
 		// Same omitzero rationale as the Packed*Array fields above, applied
 		// to the separate typed-Array[T] mechanism.
-		TypedStringArrayValue  []string  `json:"typed_string_array_value,omitzero"`
-		TypedIntArrayValue     []int64   `json:"typed_int_array_value,omitzero"`
-		TypedFloatArrayValue   []float64 `json:"typed_float_array_value,omitzero"`
-		TypedVector2ArrayValue []Vector2 `json:"typed_vector2_array_value,omitzero"`
-		TypedColorArrayValue   []Color   `json:"typed_color_array_value,omitzero"`
-		TypedVector3ArrayValue []Vector3 `json:"typed_vector3_array_value,omitzero"`
+		TypedStringArrayValue   []string  `json:"typed_string_array_value,omitzero"`
+		TypedIntArrayValue      []int64   `json:"typed_int_array_value,omitzero"`
+		TypedFloatArrayValue    []float64 `json:"typed_float_array_value,omitzero"`
+		TypedVector2ArrayValue  []Vector2 `json:"typed_vector2_array_value,omitzero"`
+		TypedColorArrayValue    []Color   `json:"typed_color_array_value,omitzero"`
+		TypedVector3ArrayValue  []Vector3 `json:"typed_vector3_array_value,omitzero"`
+		TypedResourceArrayValue []string  `json:"typed_resource_array_value,omitzero"`
 	}{
-		Path:                   resPath,
-		NodePath:               params.NodePath,
-		PropertyName:           params.PropertyName,
-		StringValue:            params.StringValue,
-		IntValue:               params.IntValue,
-		FloatValue:             params.FloatValue,
-		BoolValue:              params.BoolValue,
-		Vector2Value:           params.Vector2Value,
-		Vector3Value:           params.Vector3Value,
-		ColorValue:             params.ColorValue,
-		Vector2iValue:          params.Vector2iValue,
-		Vector3iValue:          params.Vector3iValue,
-		QuaternionValue:        params.QuaternionValue,
-		Rect2Value:             params.Rect2Value,
-		Rect2iValue:            params.Rect2iValue,
-		PlaneValue:             params.PlaneValue,
-		AABBValue:              params.AABBValue,
-		BasisValue:             params.BasisValue,
-		Transform2DValue:       params.Transform2DValue,
-		Transform3DValue:       params.Transform3DValue,
-		NodePathValue:          params.NodePathValue,
-		ResourceValue:          resourceResPath,
-		StringArrayValue:       params.StringArrayValue,
-		IntArrayValue:          params.IntArrayValue,
-		FloatArrayValue:        params.FloatArrayValue,
-		Vector2ArrayValue:      params.Vector2ArrayValue,
-		ColorArrayValue:        params.ColorArrayValue,
-		Vector3ArrayValue:      params.Vector3ArrayValue,
-		NodePathArrayValue:     params.NodePathArrayValue,
-		TypedStringArrayValue:  params.TypedStringArrayValue,
-		TypedIntArrayValue:     params.TypedIntArrayValue,
-		TypedFloatArrayValue:   params.TypedFloatArrayValue,
-		TypedVector2ArrayValue: params.TypedVector2ArrayValue,
-		TypedColorArrayValue:   params.TypedColorArrayValue,
-		TypedVector3ArrayValue: params.TypedVector3ArrayValue,
+		Path:                    resPath,
+		NodePath:                params.NodePath,
+		PropertyName:            params.PropertyName,
+		StringValue:             params.StringValue,
+		IntValue:                params.IntValue,
+		FloatValue:              params.FloatValue,
+		BoolValue:               params.BoolValue,
+		Vector2Value:            params.Vector2Value,
+		Vector3Value:            params.Vector3Value,
+		ColorValue:              params.ColorValue,
+		Vector2iValue:           params.Vector2iValue,
+		Vector3iValue:           params.Vector3iValue,
+		QuaternionValue:         params.QuaternionValue,
+		Rect2Value:              params.Rect2Value,
+		Rect2iValue:             params.Rect2iValue,
+		PlaneValue:              params.PlaneValue,
+		AABBValue:               params.AABBValue,
+		BasisValue:              params.BasisValue,
+		Transform2DValue:        params.Transform2DValue,
+		Transform3DValue:        params.Transform3DValue,
+		NodePathValue:           params.NodePathValue,
+		ResourceValue:           resourceResPath,
+		StringArrayValue:        params.StringArrayValue,
+		IntArrayValue:           params.IntArrayValue,
+		FloatArrayValue:         params.FloatArrayValue,
+		Vector2ArrayValue:       params.Vector2ArrayValue,
+		ColorArrayValue:         params.ColorArrayValue,
+		Vector3ArrayValue:       params.Vector3ArrayValue,
+		NodePathArrayValue:      params.NodePathArrayValue,
+		TypedStringArrayValue:   params.TypedStringArrayValue,
+		TypedIntArrayValue:      params.TypedIntArrayValue,
+		TypedFloatArrayValue:    params.TypedFloatArrayValue,
+		TypedVector2ArrayValue:  params.TypedVector2ArrayValue,
+		TypedColorArrayValue:    params.TypedColorArrayValue,
+		TypedVector3ArrayValue:  params.TypedVector3ArrayValue,
+		TypedResourceArrayValue: typedResourceResPaths,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}
