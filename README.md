@@ -45,10 +45,9 @@ what's shipped.
 
 ## Installation
 
-_Release binaries via GitHub Releases are planned but not yet published. Once available:_
+Download the binary for your platform from the Releases page, or:
 
 ```bash
-# download the binary for your platform from the Releases page, or:
 go install github.com/jhovanic/godot-mcp-server/cmd/godot-mcp-server@latest
 ```
 
@@ -72,6 +71,20 @@ scoped write tools like `set_node_property` and `set_script_export`, or `-mode a
 additionally expose `set_function_body` — the one tool that lets the AI client author or replace
 executable GDScript logic; read [SECURITY.md](./SECURITY.md) before enabling it. Full
 configuration reference is TBD as the tool surface stabilizes.
+
+```json
+{
+  "mcpServers": {
+    "godot": {
+      "command": "godot-mcp-server",
+      "args": [
+        "--project", "/path/to/your/godot/project",
+        "--mode", "read-write"
+      ]
+    }
+  }
+}
+```
 
 ## Security
 
