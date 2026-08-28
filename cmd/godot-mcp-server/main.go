@@ -53,7 +53,7 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.godotBin, "godot-bin", "godot", "path to (or name on PATH of) the Godot executable used for the headless CLI tier")
 	fs.StringVar(&cfg.operationsScript, "operations-script", "", "path to the fixed headless operations script (default: scripts/godot_operations.gd next to this binary)")
 	fs.StringVar(&cfg.auditLogPath, "audit-log", "", "optional additional path to write the audit log to (entries are always written to stderr and to logs/<session>.txt next to this binary)")
-	fs.StringVar(&cfg.mode, "mode", string(tools.ModeReadOnly), fmt.Sprintf("which tools to expose: %q or %q; write tools are never advertised to the MCP client outside %q", tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeReadWrite))
+	fs.StringVar(&cfg.mode, "mode", string(tools.ModeReadOnly), fmt.Sprintf("which tools to expose: %q, %q, or %q (a strict superset of %q that additionally unlocks set_function_body — see SECURITY.md before using it); write tools are never advertised to the MCP client outside %q and %q", tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeAdvanced, tools.ModeReadWrite, tools.ModeReadWrite, tools.ModeAdvanced))
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -61,8 +61,8 @@ func parseFlags(args []string) (config, error) {
 	if cfg.projectRoot == "" {
 		return config{}, errors.New("-project is required")
 	}
-	if cfg.mode != string(tools.ModeReadOnly) && cfg.mode != string(tools.ModeReadWrite) {
-		return config{}, fmt.Errorf("-mode %q: must be %q or %q", cfg.mode, tools.ModeReadOnly, tools.ModeReadWrite)
+	if cfg.mode != string(tools.ModeReadOnly) && cfg.mode != string(tools.ModeReadWrite) && cfg.mode != string(tools.ModeAdvanced) {
+		return config{}, fmt.Errorf("-mode %q: must be %q, %q, or %q", cfg.mode, tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeAdvanced)
 	}
 	return cfg, nil
 }
@@ -172,10 +172,15 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		BinaryResource:  headlessClient,
 		ImportSettings:  headlessClient,
 		NodeProperty:    headlessClient,
+		ScriptExport:    headlessClient,
+		FunctionBody:    headlessClient,
 		Mode:            tools.Mode(cfg.mode),
 		Logger:          logger,
 	})
 
+	if cfg.mode == string(tools.ModeAdvanced) {
+		_, _ = fmt.Fprintln(stderr, "godot-mcp-server: WARNING: -mode advanced is enabled — the connected AI client can write and replace executable GDScript logic in this project. See SECURITY.md before using this mode.")
+	}
 	_, _ = fmt.Fprintf(stderr, "godot-mcp-server: project root %s, mode %s, serving over stdio\n", root.String(), cfg.mode)
 	return server.Run(ctx, &mcp.StdioTransport{})
 }

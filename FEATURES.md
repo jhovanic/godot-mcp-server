@@ -204,7 +204,69 @@ changelog.
           NodePath string) — likely stays out of scope entirely; there's no clean way to express
           "assign this other node" as a scoped, structured tool argument the way everything above
           can be
-- [ ] Scoped script edit via structured diff (not arbitrary rewrite)
+- [x] Scoped script edit via structured diff (not arbitrary rewrite) — split into two tools across
+      two risk tiers, per SECURITY.md's prescription that anything riskier than the stated
+      defaults should be an explicit, off-by-default "advanced" tool rather than a loosening of
+      them. Both operate on an existing `.gd` script's raw text directly in Go (no
+      `scripts/godot_operations.gd` involvement — same rationale as `read_script`, see its doc
+      comment: GDScript is plain UTF-8 text, no engine capability is needed to read or splice it),
+      and both verify the result via `godot --headless --check-only --script <path>` after
+      writing, rolling back to the original file contents if it doesn't parse (confirmed
+      empirically against a real Godot 4.7.2 binary: `--check-only` exits 0 with no output on a
+      valid script, exits 1 with a `SCRIPT ERROR: Parse Error: ...` message on an invalid one, and
+      is parse-only — it never executes class-body or function-body code, the analogue of
+      `set_node_property`'s "read the value back and verify it changed" pattern, adapted to
+      script text). Neither tool creates a new script file from scratch — both require the target
+      `.gd` file to already exist.
+    - [x] `set_script_export` — adds or modifies a single top-level `@export var <name>: <Type> =
+          <default>` declaration. Registered under `-mode read-write` (and, since `-mode advanced`
+          is a strict superset, also under `-mode advanced`) — a structural, non-executable
+          declaration edit is the same risk class as `set_node_property`, not the `-mode advanced`
+          tier. v1 value-type scope mirrors `set_node_property`'s own "primitives first" ordering:
+        - [x] Primitives: string, int, float, bool
+        - [x] Vector2, Vector3, Color
+        - [ ] Vector2i / Vector3i, Quaternion, Rect2 / Rect2i, Plane, AABB, Basis, Transform2D /
+              Transform3D, NodePath — deferred for the same reason `set_node_property` built these
+              after its first four: no new design question, just more render-as-GDScript-literal
+              cases to add one at a time once real usage asks for one
+        - [ ] Packed/typed arrays and Resource-typed export defaults — deferred: an array or
+              Resource default needs its own literal-rendering design (e.g. a `preload()` call for
+              a Resource default), not just another scalar case
+        - [ ] Other declaration kinds — deliberately out of v1, each for its own reason, not
+              bundled into `set_script_export` just because it's also "a line near the top of a
+              script":
+            - [ ] `signal` declarations — a different statement shape entirely (no type/default
+                  pair), would need its own params shape, not a variant of this tool's
+            - [ ] `class_name` / `extends` edits — change the script's identity/inheritance, a much
+                  bigger blast radius than adding one property (every file referencing this script
+                  by class name, or relying on its base class, is affected)
+            - [ ] `@onready var` declarations — same declaration shape as `@export var` but a
+                  different annotation with different semantics (evaluated at `_ready()`, not
+                  editor-exposed); revisit once `@export var` is proven out
+    - [x] `set_function_body` — replaces an existing top-level function's body (and, selectively,
+          its parameters and/or return type — `nil` on either leaves that part of the existing
+          signature unchanged) with caller-supplied GDScript source text, or inserts a new
+          top-level function (appended at the end of the file) if the named function doesn't exist
+          yet. This is the one tool in this server that lets an AI client author or replace
+          executable logic, so it does not fit under `-mode read-write`: gated behind a new
+          `-mode advanced` value (`internal/tools.Mode`'s third value, `ModeAdvanced`, a strict
+          superset of `ModeReadWrite` — registers everything `-mode read-write` does, plus this),
+          requiring an explicit, separate operator opt-in at startup (also prints a loud stderr
+          warning naming the risk), matching SECURITY.md's prescribed shape for anything riskier
+          than the stated defaults. Full signature replacement (not just the body) was a
+          deliberate call: the tool is already gated behind an explicit opt-in, so intent is
+          established, and correctness of call sites elsewhere in the project after a signature
+          change is left to the operator/AI to catch — e.g. via the future TCP tier's
+          console/debugger-output reading, iteratively, as separate scoped calls — rather than
+          asking this single-function-scoped tool to be a safe whole-project refactorer.
+          `function_name` itself is never changed by this operation — renaming (updating every
+          call site's call syntax elsewhere in the project) is a qualitatively bigger, cross-file
+          operation, out of scope here. `--check-only` verification catches syntax errors, not
+          incorrect logic — it cannot tell a caller their function body is wrong, unsafe, or
+          behaves unexpectedly, only that it parses. v1 scope: top-level functions only (a `func`
+          line at zero indentation, so a nested `class`'s own methods are never matched by
+          mistake); single-line function signatures only (a wrapped multi-line `func foo(\n  a,\n)
+          -> void:` parameter list is refused with a clear error, not guessed at).
 - [ ] Add / remove node (parameterized)
 
 ### TCP runtime tier

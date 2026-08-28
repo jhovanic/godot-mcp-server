@@ -80,6 +80,16 @@ const (
 	// require an explicit, validated opt-in (e.g. a -mode flag) before ever
 	// constructing a Deps with this value — see main.go's parseFlags.
 	ModeReadWrite Mode = "read-write"
+	// ModeAdvanced is a strict superset of ModeReadWrite: it registers
+	// every read tool, every ModeReadWrite tool, and additionally the
+	// tools in SECURITY.md's "explicit, off-by-default, advanced tool"
+	// category — currently just set_function_body, the one tool that lets
+	// an AI client author or replace executable GDScript logic. There is
+	// no way to reach ModeAdvanced except an explicit -mode advanced flag
+	// at startup (see main.go's parseFlags); it is never implied by, or
+	// reachable from within, a running session — the same guarantee
+	// ModeReadWrite already has.
+	ModeAdvanced Mode = "advanced"
 )
 
 // NodePropertySetter is the narrow interface the set_node_property tool
@@ -89,6 +99,23 @@ const (
 // ModeReadWrite.
 type NodePropertySetter interface {
 	SetNodeProperty(ctx context.Context, params headless.SetNodePropertyParams) (*headless.SetNodePropertyResult, error)
+}
+
+// ScriptExportSetter is the narrow interface the set_script_export tool
+// depends on. *headless.Client satisfies it without ever invoking Godot
+// for the edit itself (see SetScriptExport's doc comment) — only for a
+// separate, post-write --check-only verification. A write tool, registered
+// under both ModeReadWrite and ModeAdvanced (a structural declaration edit
+// is the same risk class as set_node_property, not the ModeAdvanced tier).
+type ScriptExportSetter interface {
+	SetScriptExport(ctx context.Context, params headless.SetScriptExportParams) (*headless.SetScriptExportResult, error)
+}
+
+// FunctionBodySetter is the narrow interface the set_function_body tool
+// depends on. Registered only under ModeAdvanced — see ModeAdvanced's doc
+// comment for why.
+type FunctionBodySetter interface {
+	SetFunctionBody(ctx context.Context, params headless.SetFunctionBodyParams) (*headless.SetFunctionBodyResult, error)
 }
 
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
@@ -102,6 +129,8 @@ type Deps struct {
 	BinaryResource  BinaryResourceReader
 	ImportSettings  ImportSettingsReader
 	NodeProperty    NodePropertySetter
+	ScriptExport    ScriptExportSetter
+	FunctionBody    FunctionBodySetter
 	Mode            Mode
 	Logger          *audit.Logger
 }
@@ -123,8 +152,12 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	registerReadBinaryResource(server, deps)
 	registerReadImportSettings(server, deps)
 
-	if deps.Mode == ModeReadWrite {
+	if deps.Mode == ModeReadWrite || deps.Mode == ModeAdvanced {
 		registerSetNodeProperty(server, deps)
+		registerSetScriptExport(server, deps)
+	}
+	if deps.Mode == ModeAdvanced {
+		registerSetFunctionBody(server, deps)
 	}
 }
 
@@ -289,6 +322,72 @@ func registerSetNodeProperty(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		result, err := deps.NodeProperty.SetNodeProperty(ctx, args)
 		deps.Logger.LogResult("headless", "set_node_property", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerSetScriptExport(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_script_export",
+		Description: "Write. Adds or modifies a single top-level @export var declaration " +
+			"(string, integer, floating-point, boolean, Vector2, Vector3, or Color default) in " +
+			"an existing .gd script under the configured project root, then verifies the " +
+			"result still parses and saves it — never touches a function body or any other " +
+			"executable logic. Fails, without modifying the script, if the script doesn't " +
+			"exist, name isn't a valid identifier, or the edited script fails to parse. Only " +
+			"ever available when the server was started with -mode read-write or -mode " +
+			"advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetScriptExportParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.ScriptExport.SetScriptExport(ctx, args)
+		deps.Logger.LogResult("headless", "set_script_export", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerSetFunctionBody(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "set_function_body",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. This is the one tool in this server that lets an AI client " +
+			"author or replace executable GDScript logic and signatures — read SECURITY.md " +
+			"before enabling this mode. Replaces an existing top-level function's body (and, " +
+			"selectively, its parameters and/or return type) in an existing .gd script under " +
+			"the configured project root, or inserts a new top-level function at the end of " +
+			"the file if function_name doesn't exist yet, then verifies the result still " +
+			"parses and saves it. Only ever matches a top-level function (a same-named method " +
+			"nested inside a class block is never touched) with a single-line signature. " +
+			"Fails, without modifying the script, if the script doesn't exist, function_name " +
+			"isn't a valid identifier, the existing signature spans multiple lines, or the " +
+			"edited script fails to parse. check-only verification after writing catches " +
+			"syntax errors only, never incorrect logic or call sites elsewhere in the " +
+			"project broken by a signature change.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.SetFunctionBodyParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.FunctionBody.SetFunctionBody(ctx, args)
+		deps.Logger.LogResult("headless", "set_function_body", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

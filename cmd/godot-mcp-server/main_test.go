@@ -66,6 +66,16 @@ func TestParseFlags_ExplicitReadWriteMode(t *testing.T) {
 	}
 }
 
+func TestParseFlags_ExplicitAdvancedMode(t *testing.T) {
+	cfg, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-mode", "advanced"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if cfg.mode != "advanced" {
+		t.Errorf("mode = %q, want %q", cfg.mode, "advanced")
+	}
+}
+
 func TestParseFlags_InvalidMode(t *testing.T) {
 	_, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-mode", "read-write-please"})
 	if err == nil {

@@ -2178,3 +2178,328 @@ func TestReadImportSettings_RealGodot(t *testing.T) {
 		t.Errorf("Source missing expected importer field: %s", got.Source)
 	}
 }
+
+// scriptEditFixtureClient builds a fresh, temp-dir-backed project (not the
+// shared testdata/fixture_project — same reasoning as
+// setNodePropertyFixtureClient: these tests write to the project) with one
+// script, player.gd, exercising a top-level @export var, a top-level
+// function, and a nested "class Helper:" with a same-named method, so
+// top-level-only scoping is proven against real Godot, not just the pure
+// splice-function tests.
+func scriptEditFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "player.gd"), []byte(scriptEditIntegrationFixtureSource), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+const scriptEditIntegrationFixtureSource = `extends Node
+
+@export var speed: float = 300.0
+
+func take_damage(amount: int) -> void:
+	print(amount)
+
+class Helper:
+	func take_damage() -> void:
+		pass
+`
+
+func TestSetScriptExport_RealGodot_InsertsNewDeclaration(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	i := int64(100)
+	result, err := c.SetScriptExport(ctx, SetScriptExportParams{
+		ScriptPath: "player.gd",
+		Name:       "health",
+		IntValue:   &i,
+	})
+	if err != nil {
+		t.Fatalf("SetScriptExport against a real Godot binary: %v", err)
+	}
+	if result.Action != "inserted" {
+		t.Errorf("Action = %q, want %q", result.Action, "inserted")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "@export var health: int = 100") {
+		t.Errorf("saved script missing the new declaration: %s", data)
+	}
+	if !strings.Contains(string(data), "@export var speed: float = 300.0") {
+		t.Errorf("saved script lost the existing declaration: %s", data)
+	}
+}
+
+func TestSetScriptExport_RealGodot_ModifiesExistingDeclaration(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	f := 500.0
+	result, err := c.SetScriptExport(ctx, SetScriptExportParams{
+		ScriptPath: "player.gd",
+		Name:       "speed",
+		FloatValue: &f,
+	})
+	if err != nil {
+		t.Fatalf("SetScriptExport against a real Godot binary: %v", err)
+	}
+	if result.Action != "modified" {
+		t.Errorf("Action = %q, want %q", result.Action, "modified")
+	}
+	if result.PreviousDeclaration != "@export var speed: float = 300.0" {
+		t.Errorf("PreviousDeclaration = %q", result.PreviousDeclaration)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "@export var speed: float = 500.0") {
+		t.Errorf("saved script missing the modified declaration: %s", data)
+	}
+}
+
+// TestSetScriptExport_RealGodot_RollsBackOnInvalidResult uses a name that
+// passes Go's identifier regex but is a GDScript reserved word, so only
+// the real parser (via checkScriptParses) catches it.
+func TestSetScriptExport_RealGodot_RollsBackOnInvalidResult(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	i := int64(1)
+	_, err = c.SetScriptExport(ctx, SetScriptExportParams{
+		ScriptPath: "player.gd",
+		Name:       "var",
+		IntValue:   &i,
+	})
+	if err == nil {
+		t.Fatal("SetScriptExport with a reserved-word name against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("script was modified despite the parse-failure rollback:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestSetFunctionBody_RealGodot_ReplacesExistingFunctionBody(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.SetFunctionBody(ctx, SetFunctionBodyParams{
+		ScriptPath:   "player.gd",
+		FunctionName: "take_damage",
+		Body:         "print(\"took %d damage\" % amount)",
+	})
+	if err != nil {
+		t.Fatalf("SetFunctionBody against a real Godot binary: %v", err)
+	}
+	if result.Action != "modified" {
+		t.Errorf("Action = %q, want %q", result.Action, "modified")
+	}
+	if result.PreviousSignature != "func take_damage(amount: int) -> void:" {
+		t.Errorf("PreviousSignature = %q", result.PreviousSignature)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "func take_damage(amount: int) -> void:\n\tprint(\"took %d damage\" % amount)") {
+		t.Errorf("saved script missing the replaced body: %s", data)
+	}
+}
+
+// TestSetFunctionBody_RealGodot_SignatureVariations exercises replacing
+// parameters only, return type only, and both together against a real
+// Godot parse — table-driven since the shape of the check is identical.
+func TestSetFunctionBody_RealGodot_SignatureVariations(t *testing.T) {
+	tests := []struct {
+		name       string
+		parameters *string
+		returnType *string
+		wantSig    string
+	}{
+		{"parameters only", strPtr("amount: int, source: Node"), nil, "func take_damage(amount: int, source: Node) -> void:"},
+		{"return type only", nil, strPtr("bool"), "func take_damage(amount: int) -> bool:"},
+		{"both", strPtr("amount: int, source: Node"), strPtr("bool"), "func take_damage(amount: int, source: Node) -> bool:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := scriptEditFixtureClient(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			body := "print(amount)"
+			if tt.returnType != nil && *tt.returnType == "bool" {
+				body = "print(amount)\nreturn true"
+			}
+			_, err := c.SetFunctionBody(ctx, SetFunctionBodyParams{
+				ScriptPath:   "player.gd",
+				FunctionName: "take_damage",
+				Parameters:   tt.parameters,
+				ReturnType:   tt.returnType,
+				Body:         body,
+			})
+			if err != nil {
+				t.Fatalf("SetFunctionBody against a real Godot binary: %v", err)
+			}
+
+			data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+			if err != nil {
+				t.Fatalf("reading saved script: %v", err)
+			}
+			if !strings.Contains(string(data), tt.wantSig) {
+				t.Errorf("saved script missing expected signature %q: %s", tt.wantSig, data)
+			}
+		})
+	}
+}
+
+func TestSetFunctionBody_RealGodot_InsertsNewFunction(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.SetFunctionBody(ctx, SetFunctionBodyParams{
+		ScriptPath:   "player.gd",
+		FunctionName: "heal",
+		Parameters:   strPtr("amount: int"),
+		ReturnType:   strPtr("void"),
+		Body:         "print(amount)",
+	})
+	if err != nil {
+		t.Fatalf("SetFunctionBody against a real Godot binary: %v", err)
+	}
+	if result.Action != "inserted" {
+		t.Errorf("Action = %q, want %q", result.Action, "inserted")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "func heal(amount: int) -> void:\n\tprint(amount)") {
+		t.Errorf("saved script missing the inserted function: %s", data)
+	}
+	if !strings.Contains(string(data), "func take_damage(amount: int) -> void:") {
+		t.Errorf("saved script lost the existing function: %s", data)
+	}
+}
+
+func TestSetFunctionBody_RealGodot_InsertsNewFunction_NoParametersNoReturnType(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetFunctionBody(ctx, SetFunctionBodyParams{
+		ScriptPath:   "player.gd",
+		FunctionName: "reset",
+		Body:         "pass",
+	})
+	if err != nil {
+		t.Fatalf("SetFunctionBody against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "func reset():\n\tpass") {
+		t.Errorf("saved script missing the bare inserted function: %s", data)
+	}
+}
+
+func TestSetFunctionBody_RealGodot_TopLevelOnly_DoesNotTouchNestedClassFunction(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetFunctionBody(ctx, SetFunctionBodyParams{
+		ScriptPath:   "player.gd",
+		FunctionName: "take_damage",
+		Body:         "print(\"top-level replacement\")",
+	})
+	if err != nil {
+		t.Fatalf("SetFunctionBody against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading saved script: %v", err)
+	}
+	if !strings.Contains(string(data), "\tfunc take_damage() -> void:\n\t\tpass") {
+		t.Errorf("saved script lost Helper's own nested take_damage(): %s", data)
+	}
+	if !strings.Contains(string(data), "print(\"top-level replacement\")") {
+		t.Errorf("saved script missing the top-level replacement: %s", data)
+	}
+}
+
+// TestSetFunctionBody_RealGodot_RollsBackOnInvalidResult supplies a body
+// with genuinely invalid GDScript syntax that only the real parser can
+// catch — Go has no business trying to validate arbitrary statement text.
+func TestSetFunctionBody_RealGodot_RollsBackOnInvalidResult(t *testing.T) {
+	c := scriptEditFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.SetFunctionBody(ctx, SetFunctionBodyParams{
+		ScriptPath:   "player.gd",
+		FunctionName: "take_damage",
+		Body:         "this is not ) valid gdscript !!!",
+	})
+	if err == nil {
+		t.Fatal("SetFunctionBody with invalid GDScript body against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "player.gd"))
+	if err != nil {
+		t.Fatalf("reading script after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("script was modified despite the parse-failure rollback:\nbefore: %s\nafter: %s", before, after)
+	}
+}

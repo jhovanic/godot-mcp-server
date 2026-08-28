@@ -67,7 +67,11 @@ Point your MCP client (Claude Code, Claude Desktop, etc.) at the binary. Example
 }
 ```
 
-Full configuration reference is TBD as the tool surface stabilizes.
+By default only read tools are exposed. Pass `-mode read-write` (as an extra arg) to also expose
+scoped write tools like `set_node_property` and `set_script_export`, or `-mode advanced` to
+additionally expose `set_function_body` — the one tool that lets the AI client author or replace
+executable GDScript logic; read [SECURITY.md](./SECURITY.md) before enabling it. Full
+configuration reference is TBD as the tool surface stabilizes.
 
 ## Security
 

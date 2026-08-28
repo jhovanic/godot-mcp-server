@@ -98,6 +98,30 @@ func (f *fakeNodePropertySetter) SetNodeProperty(_ context.Context, params headl
 	return f.result, f.err
 }
 
+// fakeScriptExportSetter is a test double for tools.ScriptExportSetter.
+type fakeScriptExportSetter struct {
+	gotParams headless.SetScriptExportParams
+	result    *headless.SetScriptExportResult
+	err       error
+}
+
+func (f *fakeScriptExportSetter) SetScriptExport(_ context.Context, params headless.SetScriptExportParams) (*headless.SetScriptExportResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeFunctionBodySetter is a test double for tools.FunctionBodySetter.
+type fakeFunctionBodySetter struct {
+	gotParams headless.SetFunctionBodyParams
+	result    *headless.SetFunctionBodyResult
+	err       error
+}
+
+func (f *fakeFunctionBodySetter) SetFunctionBody(_ context.Context, params headless.SetFunctionBodyParams) (*headless.SetFunctionBodyResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
 func connect(t *testing.T, server *mcp.Server) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -682,17 +706,29 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 		BinaryResource:  &fakeBinaryResourceReader{},
 		ImportSettings:  &fakeImportSettingsReader{},
 		NodeProperty:    &fakeNodePropertySetter{},
+		ScriptExport:    &fakeScriptExportSetter{},
+		FunctionBody:    &fakeFunctionBodySetter{},
 		Mode:            mode,
 		Logger:          logger,
 	}
 }
 
+// readWriteToolNames is the write-tool set ModeReadWrite adds on top of
+// readToolNames — a strict subset of what ModeAdvanced adds, since
+// ModeAdvanced is a superset of ModeReadWrite.
+var readWriteToolNames = map[string]bool{
+	"set_node_property": true,
+	"set_script_export": true,
+}
+
 // TestRegisterAll_ModeGatesWriteTools asserts the write tool set advertised
 // to the MCP client tracks deps.Mode exactly: only the read tools in
 // ModeReadOnly (including the zero value of Mode, so an unset Mode fails
-// safe rather than fails open), plus set_node_property in ModeReadWrite.
-// Update the write-tool list deliberately when the next write tool is
-// intentionally added.
+// safe rather than fails open), plus set_node_property and
+// set_script_export in ModeReadWrite, plus set_function_body in
+// ModeAdvanced (a strict superset of ModeReadWrite's own tools). Update the
+// write-tool lists deliberately when the next write tool is intentionally
+// added.
 func TestRegisterAll_ModeGatesWriteTools(t *testing.T) {
 	cases := []struct {
 		name string
@@ -701,7 +737,8 @@ func TestRegisterAll_ModeGatesWriteTools(t *testing.T) {
 	}{
 		{name: "zero value", mode: "", want: readToolNames},
 		{name: "read-only", mode: tools.ModeReadOnly, want: readToolNames},
-		{name: "read-write", mode: tools.ModeReadWrite, want: union(readToolNames, map[string]bool{"set_node_property": true})},
+		{name: "read-write", mode: tools.ModeReadWrite, want: union(readToolNames, readWriteToolNames)},
+		{name: "advanced", mode: tools.ModeAdvanced, want: union(readToolNames, union(readWriteToolNames, map[string]bool{"set_function_body": true}))},
 	}
 
 	for _, tc := range cases {
@@ -1933,5 +1970,269 @@ func TestSetNodeProperty_Error(t *testing.T) {
 	}
 	if entry.Outcome != audit.OutcomeError {
 		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+func TestSetScriptExport_Success(t *testing.T) {
+	setter := &fakeScriptExportSetter{
+		result: &headless.SetScriptExportResult{
+			Path:   "res://player.gd",
+			Name:   "health",
+			Action: "inserted",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptExport = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_export",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"name":        "health",
+			"int_value":   100,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.ScriptPath != "player.gd" || setter.gotParams.Name != "health" {
+		t.Fatalf("handler did not pass through params, got %+v", setter.gotParams)
+	}
+	if setter.gotParams.IntValue == nil || *setter.gotParams.IntValue != 100 {
+		t.Fatalf("handler did not pass through int_value, got %+v", setter.gotParams.IntValue)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "set_script_export" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "set_script_export")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestSetScriptExport_Error(t *testing.T) {
+	wantErr := errors.New("boom: no such script")
+	setter := &fakeScriptExportSetter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ScriptExport = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_script_export",
+		Arguments: map[string]any{
+			"script_path": "player.gd",
+			"name":        "health",
+			"int_value":   100,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestSetScriptExport_NotRegisteredUnderReadOnly confirms set_script_export
+// is a write tool: never advertised to the MCP client under ModeReadOnly.
+func TestSetScriptExport_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "set_script_export" {
+			t.Fatal("set_script_export was advertised under ModeReadOnly")
+		}
+	}
+}
+
+func TestSetFunctionBody_Success(t *testing.T) {
+	setter := &fakeFunctionBodySetter{
+		result: &headless.SetFunctionBodyResult{
+			Path:         "res://player.gd",
+			FunctionName: "take_damage",
+			Action:       "modified",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.FunctionBody = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_function_body",
+		Arguments: map[string]any{
+			"script_path":   "player.gd",
+			"function_name": "take_damage",
+			"body":          "health -= amount",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.ScriptPath != "player.gd" || setter.gotParams.FunctionName != "take_damage" || setter.gotParams.Body != "health -= amount" {
+		t.Fatalf("handler did not pass through params, got %+v", setter.gotParams)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "set_function_body" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "set_function_body")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestSetFunctionBody_PassesThroughOptionalSignatureFields(t *testing.T) {
+	setter := &fakeFunctionBodySetter{
+		result: &headless.SetFunctionBodyResult{Path: "res://player.gd", FunctionName: "attack", Action: "inserted"},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.FunctionBody = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_function_body",
+		Arguments: map[string]any{
+			"script_path":   "player.gd",
+			"function_name": "attack",
+			"parameters":    "target: Node",
+			"return_type":   "void",
+			"body":          "target.take_damage(10)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if setter.gotParams.Parameters == nil || *setter.gotParams.Parameters != "target: Node" {
+		t.Fatalf("handler did not pass through parameters, got %+v", setter.gotParams.Parameters)
+	}
+	if setter.gotParams.ReturnType == nil || *setter.gotParams.ReturnType != "void" {
+		t.Fatalf("handler did not pass through return_type, got %+v", setter.gotParams.ReturnType)
+	}
+}
+
+func TestSetFunctionBody_Error(t *testing.T) {
+	wantErr := errors.New("boom: function signature does not fit on a single line")
+	setter := &fakeFunctionBodySetter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.FunctionBody = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_function_body",
+		Arguments: map[string]any{
+			"script_path":   "player.gd",
+			"function_name": "take_damage",
+			"body":          "pass",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestSetFunctionBody_NotRegisteredUnderReadWrite confirms set_function_body
+// is gated strictly behind ModeAdvanced, not merely ModeReadWrite — the one
+// tool in this server that lets an AI client author or replace executable
+// GDScript logic must never be reachable from the ordinary write tier.
+func TestSetFunctionBody_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "set_function_body" {
+			t.Fatal("set_function_body was advertised under ModeReadWrite")
+		}
 	}
 }
