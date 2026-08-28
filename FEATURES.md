@@ -79,12 +79,11 @@ changelog.
           its real-Godot test target is a custom script-exported property too
     - [x] AABB — a 3D axis-aligned bounding box (a position Vector3 + a size Vector3)
     - [x] Basis — a 3x3 matrix (9 floats); 3D rotation/scale without translation
-    - [ ] Transform2D / Transform3D — the actual stored representation behind a node's own
-          transform. Note from building Vector3 support: Node3D's `position`/`rotation`/`scale`
-          aren't stored properties at all, only `transform` is — those are synthetic accessors
-          onto it (see `TestSetNodeProperty_RealGodot_Vector3`'s doc comment) — so full transform
-          support may end up mattering more in practice than the individual-component vectors
-          already built
+    - [x] Transform2D / Transform3D — the actual stored representation behind a node's own
+          transform. Note: this runs opposite ways for 2D vs 3D — Node3D stores `transform`
+          directly (`position`/`rotation`/`scale`/`basis`/`quaternion` are synthetic accessors
+          onto it), while Node2D stores `position`/`rotation`/`scale`/`skew` directly (`transform`
+          itself is the synthetic accessor)
     - [ ] NodePath — addresses another node in the *already-loaded* scene tree (not a filesystem
           path, so it doesn't reopen the path-validation question the way resource references
           below do); trivial to implement (wrap a string in `NodePath(...)`) but still worth a

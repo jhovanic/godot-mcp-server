@@ -928,6 +928,108 @@ func TestSetNodeProperty_RejectsBasisPlusOtherValue(t *testing.T) {
 	}
 }
 
+// Transform2DValue and Transform3DValue participate in the same "exactly
+// one *_value field" count as the other value fields, proven the same way
+// as Vector2AloneIsValid above.
+
+func TestSetNodeProperty_Transform2DAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "transform",
+		Transform2DValue: &Transform2D{
+			X:      Vector2{X: 1, Y: 0},
+			Y:      Vector2{X: 0, Y: 1},
+			Origin: Vector2{X: 10, Y: 20},
+		},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone transform2d_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone transform2d_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsTransform2DPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "transform",
+		Transform2DValue: &Transform2D{
+			X:      Vector2{X: 1, Y: 0},
+			Y:      Vector2{X: 0, Y: 1},
+			Origin: Vector2{X: 10, Y: 20},
+		},
+		Vector2Value: &Vector2{X: 1, Y: 2},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with transform2d_value and vector2_value both set, want error")
+	}
+}
+
+func TestSetNodeProperty_Transform3DAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "transform",
+		Transform3DValue: &Transform3D{
+			Basis: Basis{
+				X: Vector3{X: 1, Y: 0, Z: 0},
+				Y: Vector3{X: 0, Y: 1, Z: 0},
+				Z: Vector3{X: 0, Y: 0, Z: 1},
+			},
+			Origin: Vector3{X: 10, Y: 20, Z: 30},
+		},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone transform3d_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone transform3d_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsTransform3DPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		PropertyName: "transform",
+		Transform3DValue: &Transform3D{
+			Basis: Basis{
+				X: Vector3{X: 1, Y: 0, Z: 0},
+				Y: Vector3{X: 0, Y: 1, Z: 0},
+				Z: Vector3{X: 0, Y: 0, Z: 1},
+			},
+			Origin: Vector3{X: 10, Y: 20, Z: 30},
+		},
+		Vector3Value: &Vector3{X: 1, Y: 2, Z: 3},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with transform3d_value and vector3_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

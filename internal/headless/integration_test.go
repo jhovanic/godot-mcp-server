@@ -618,6 +618,81 @@ func TestSetNodeProperty_RealGodot_Basis(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_RealGodot_Transform3D targets Node3D's "transform"
+// directly. Unlike every other Node3D property this package tests
+// (position, quaternion, basis — all synthetic accessors onto transform,
+// see their own doc comments), transform is the actual stored property:
+// the saved .tscn line matches the request directly, the same way Rect2's
+// region_rect does.
+func TestSetNodeProperty_RealGodot_Transform3D(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "Cube",
+		PropertyName: "transform",
+		Transform3DValue: &Transform3D{
+			Basis: Basis{
+				X: Vector3{X: 2, Y: 0, Z: 0},
+				Y: Vector3{X: 0, Y: 3, Z: 0},
+				Z: Vector3{X: 0, Y: 0, Z: 4},
+			},
+			Origin: Vector3{X: 10, Y: 20, Z: 30},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "transform = Transform3D(2, 0, 0, 0, 3, 0, 0, 0, 4, 10, 20, 30)") {
+		t.Errorf("saved scene missing expected transform property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_Transform2D targets Node2D's "transform" —
+// the reverse situation from Node3D's transform: here, transform ITSELF is
+// the synthetic accessor. Node2D only stores position/rotation/scale/skew
+// individually; setting transform decomposes the request into those, so a
+// pure-rotation-plus-origin transform (no scale or skew) round-trips
+// through the verify-before-save check correctly but shows up on disk as
+// "position = ..." and "rotation = ..." lines, not a
+// "transform = Transform2D(...)" line.
+func TestSetNodeProperty_RealGodot_Transform2D(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:    "main.tscn",
+		NodePath:     "",
+		PropertyName: "transform",
+		Transform2DValue: &Transform2D{
+			X:      Vector2{X: 0.8660254037844387, Y: 0.49999999999999994},
+			Y:      Vector2{X: -0.49999999999999994, Y: 0.8660254037844387},
+			Origin: Vector2{X: 10, Y: 20},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "position = Vector2(10, 20)") || !strings.Contains(string(data), "rotation = 0.5235988") {
+		t.Errorf("saved scene missing expected decomposed position/rotation properties: %s", data)
+	}
+}
+
 // TestSetNodeProperty_RealGodot_Vector2i targets Sprite2D's "frame_coords",
 // which — like Node3D's "position" (see TestSetNodeProperty_RealGodot_Vector3
 // above) — is not itself a stored property: Sprite2D only exports "frame"

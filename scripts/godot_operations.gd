@@ -138,13 +138,13 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 
 ## set_node_property: loads a .tscn file (already-validated res:// path),
 ## sets exactly one property (string/int/float/bool/Vector2/Vector3/Color/
-## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis — the caller
-## sends exactly one of string_value/int_value/float_value/bool_value/
-## vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/
-## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/
-## basis_value) on one node addressed by node_path (relative to the scene
-## root; empty string means the root itself), then re-packs and saves the
-## scene.
+## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis/Transform2D/
+## Transform3D — the caller sends exactly one of string_value/int_value/
+## float_value/bool_value/vector2_value/vector3_value/color_value/
+## vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/
+## plane_value/aabb_value/basis_value/transform2d_value/transform3d_value)
+## on one node addressed by node_path (relative to the scene root; empty
+## string means the root itself), then re-packs and saves the scene.
 ##
 ## Object.set() silently no-ops on an unknown property name instead of
 ## erroring, so this reads the property back after setting it and only
@@ -235,8 +235,35 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 			Vector3(float(bz.get("x", 0.0)), float(bz.get("y", 0.0)), float(bz.get("z", 0.0)))
 		)
 		values_set += 1
+	if params.get("transform2d_value") != null:
+		var t2d: Dictionary = params["transform2d_value"]
+		var t2d_x: Dictionary = t2d.get("x", {})
+		var t2d_y: Dictionary = t2d.get("y", {})
+		var t2d_origin: Dictionary = t2d.get("origin", {})
+		value = Transform2D(
+			Vector2(float(t2d_x.get("x", 0.0)), float(t2d_x.get("y", 0.0))),
+			Vector2(float(t2d_y.get("x", 0.0)), float(t2d_y.get("y", 0.0))),
+			Vector2(float(t2d_origin.get("x", 0.0)), float(t2d_origin.get("y", 0.0)))
+		)
+		values_set += 1
+	if params.get("transform3d_value") != null:
+		var t3d: Dictionary = params["transform3d_value"]
+		var t3d_basis: Dictionary = t3d.get("basis", {})
+		var t3d_bx: Dictionary = t3d_basis.get("x", {})
+		var t3d_by: Dictionary = t3d_basis.get("y", {})
+		var t3d_bz: Dictionary = t3d_basis.get("z", {})
+		var t3d_origin: Dictionary = t3d.get("origin", {})
+		value = Transform3D(
+			Basis(
+				Vector3(float(t3d_bx.get("x", 0.0)), float(t3d_bx.get("y", 0.0)), float(t3d_bx.get("z", 0.0))),
+				Vector3(float(t3d_by.get("x", 0.0)), float(t3d_by.get("y", 0.0)), float(t3d_by.get("z", 0.0))),
+				Vector3(float(t3d_bz.get("x", 0.0)), float(t3d_bz.get("y", 0.0)), float(t3d_bz.get("z", 0.0)))
+			),
+			Vector3(float(t3d_origin.get("x", 0.0)), float(t3d_origin.get("y", 0.0)), float(t3d_origin.get("z", 0.0)))
+		)
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)

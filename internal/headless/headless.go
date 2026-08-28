@@ -441,6 +441,21 @@ type Basis struct {
 	Z Vector3 `json:"z" jsonschema:"the basis's z axis (third column)"`
 }
 
+// Transform2D is a 2D affine transform (rotation/scale/skew plus
+// translation), matching Godot's own Transform2D type.
+type Transform2D struct {
+	X      Vector2 `json:"x" jsonschema:"the transform's x axis"`
+	Y      Vector2 `json:"y" jsonschema:"the transform's y axis"`
+	Origin Vector2 `json:"origin" jsonschema:"the transform's translation"`
+}
+
+// Transform3D is a 3D affine transform (a Basis plus an origin), matching
+// Godot's own Transform3D type.
+type Transform3D struct {
+	Basis  Basis   `json:"basis" jsonschema:"the transform's rotation/scale part"`
+	Origin Vector3 `json:"origin" jsonschema:"the transform's translation"`
+}
+
 // Quaternion is a four-component rotation representation, matching Godot's
 // own Quaternion type — an alternative to Euler angles for 3D rotation.
 type Quaternion struct {
@@ -474,18 +489,18 @@ type Color struct {
 // operation. Exactly one of StringValue, IntValue, FloatValue, BoolValue,
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
-// BasisValue must be set — which one determines the GDScript-side type the
-// property is set to (see scripts/godot_operations.gd's
-// _op_set_node_property), since JSON itself doesn't distinguish int from
-// float the way Go and GDScript both do.
+// BasisValue, Transform2DValue, Transform3DValue must be set — which one
+// determines the GDScript-side type the property is set to (see
+// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
+// doesn't distinguish int from float the way Go and GDScript both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
-// Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, and Basis for
-// now. Godot node properties also include other compound types (resource
-// references, NodePath, arrays, ...); supporting those is a separate,
-// larger design (how does an AI client express a sub-resource reference as
-// tool arguments?) tracked as a future FEATURES.md item, not a variant of
-// this one.
+// Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
+// Transform2D, and Transform3D for now. Godot node properties also include
+// other compound types (resource references, NodePath, arrays, ...);
+// supporting those is a separate, larger design (how does an AI client
+// express a sub-resource reference as tool arguments?) tracked as a future
+// FEATURES.md item, not a variant of this one.
 type SetNodePropertyParams struct {
 	// ScenePath is the .tscn path, relative to the project root. Validated
 	// against Root before use.
@@ -497,21 +512,23 @@ type SetNodePropertyParams struct {
 	// PropertyName is the node property to set, e.g. "visible" or "z_index".
 	PropertyName string `json:"property_name" jsonschema:"the node property to set, e.g. \"visible\" or \"z_index\""`
 
-	StringValue     *string     `json:"string_value,omitempty" jsonschema:"set property_name to this string value; exactly one of the *_value fields must be set"`
-	IntValue        *int64      `json:"int_value,omitempty" jsonschema:"set property_name to this integer value; exactly one of the *_value fields must be set"`
-	FloatValue      *float64    `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
-	BoolValue       *bool       `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
-	Vector2Value    *Vector2    `json:"vector2_value,omitempty" jsonschema:"set property_name to this Vector2 value (e.g. 2D position, scale); exactly one of the *_value fields must be set"`
-	Vector3Value    *Vector3    `json:"vector3_value,omitempty" jsonschema:"set property_name to this Vector3 value (e.g. 3D position, scale); exactly one of the *_value fields must be set"`
-	ColorValue      *Color      `json:"color_value,omitempty" jsonschema:"set property_name to this Color value (e.g. modulate, self_modulate); exactly one of the *_value fields must be set"`
-	Vector2iValue   *Vector2i   `json:"vector2i_value,omitempty" jsonschema:"set property_name to this Vector2i value (e.g. frame_coords, viewport size); exactly one of the *_value fields must be set"`
-	Vector3iValue   *Vector3i   `json:"vector3i_value,omitempty" jsonschema:"set property_name to this Vector3i value (e.g. a custom script's grid/voxel coordinates); exactly one of the *_value fields must be set"`
-	QuaternionValue *Quaternion `json:"quaternion_value,omitempty" jsonschema:"set property_name to this Quaternion value (3D rotation, e.g. Node3D.quaternion); exactly one of the *_value fields must be set"`
-	Rect2Value      *Rect2      `json:"rect2_value,omitempty" jsonschema:"set property_name to this Rect2 value (e.g. region_rect); exactly one of the *_value fields must be set"`
-	Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty" jsonschema:"set property_name to this Rect2i value; exactly one of the *_value fields must be set"`
-	PlaneValue      *Plane      `json:"plane_value,omitempty" jsonschema:"set property_name to this Plane value (a normal vector plus a distance, e.g. a custom script's boundary/clip plane); exactly one of the *_value fields must be set"`
-	AABBValue       *AABB       `json:"aabb_value,omitempty" jsonschema:"set property_name to this AABB value (a 3D axis-aligned bounding box, e.g. custom_aabb); exactly one of the *_value fields must be set"`
-	BasisValue      *Basis      `json:"basis_value,omitempty" jsonschema:"set property_name to this Basis value (3D rotation/scale without translation, e.g. Node3D.basis); exactly one of the *_value fields must be set"`
+	StringValue      *string      `json:"string_value,omitempty" jsonschema:"set property_name to this string value; exactly one of the *_value fields must be set"`
+	IntValue         *int64       `json:"int_value,omitempty" jsonschema:"set property_name to this integer value; exactly one of the *_value fields must be set"`
+	FloatValue       *float64     `json:"float_value,omitempty" jsonschema:"set property_name to this floating-point value; exactly one of the *_value fields must be set"`
+	BoolValue        *bool        `json:"bool_value,omitempty" jsonschema:"set property_name to this boolean value; exactly one of the *_value fields must be set"`
+	Vector2Value     *Vector2     `json:"vector2_value,omitempty" jsonschema:"set property_name to this Vector2 value (e.g. 2D position, scale); exactly one of the *_value fields must be set"`
+	Vector3Value     *Vector3     `json:"vector3_value,omitempty" jsonschema:"set property_name to this Vector3 value (e.g. 3D position, scale); exactly one of the *_value fields must be set"`
+	ColorValue       *Color       `json:"color_value,omitempty" jsonschema:"set property_name to this Color value (e.g. modulate, self_modulate); exactly one of the *_value fields must be set"`
+	Vector2iValue    *Vector2i    `json:"vector2i_value,omitempty" jsonschema:"set property_name to this Vector2i value (e.g. frame_coords, viewport size); exactly one of the *_value fields must be set"`
+	Vector3iValue    *Vector3i    `json:"vector3i_value,omitempty" jsonschema:"set property_name to this Vector3i value (e.g. a custom script's grid/voxel coordinates); exactly one of the *_value fields must be set"`
+	QuaternionValue  *Quaternion  `json:"quaternion_value,omitempty" jsonschema:"set property_name to this Quaternion value (3D rotation, e.g. Node3D.quaternion); exactly one of the *_value fields must be set"`
+	Rect2Value       *Rect2       `json:"rect2_value,omitempty" jsonschema:"set property_name to this Rect2 value (e.g. region_rect); exactly one of the *_value fields must be set"`
+	Rect2iValue      *Rect2i      `json:"rect2i_value,omitempty" jsonschema:"set property_name to this Rect2i value; exactly one of the *_value fields must be set"`
+	PlaneValue       *Plane       `json:"plane_value,omitempty" jsonschema:"set property_name to this Plane value (a normal vector plus a distance, e.g. a custom script's boundary/clip plane); exactly one of the *_value fields must be set"`
+	AABBValue        *AABB        `json:"aabb_value,omitempty" jsonschema:"set property_name to this AABB value (a 3D axis-aligned bounding box, e.g. custom_aabb); exactly one of the *_value fields must be set"`
+	BasisValue       *Basis       `json:"basis_value,omitempty" jsonschema:"set property_name to this Basis value (3D rotation/scale without translation, e.g. Node3D.basis); exactly one of the *_value fields must be set"`
+	Transform2DValue *Transform2D `json:"transform2d_value,omitempty" jsonschema:"set property_name to this Transform2D value (e.g. Node2D.transform); exactly one of the *_value fields must be set"`
+	Transform3DValue *Transform3D `json:"transform3d_value,omitempty" jsonschema:"set property_name to this Transform3D value (e.g. Node3D.transform); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -582,13 +599,15 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.PlaneValue != nil,
 		params.AABBValue != nil,
 		params.BasisValue != nil,
+		params.Transform2DValue != nil,
+		params.Transform3DValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -601,43 +620,47 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		PreviousValue string `json:"previous_value"`
 	}
 	if err := c.run(ctx, "set_node_property", struct {
-		Path            string      `json:"path"`
-		NodePath        string      `json:"node_path"`
-		PropertyName    string      `json:"property_name"`
-		StringValue     *string     `json:"string_value,omitempty"`
-		IntValue        *int64      `json:"int_value,omitempty"`
-		FloatValue      *float64    `json:"float_value,omitempty"`
-		BoolValue       *bool       `json:"bool_value,omitempty"`
-		Vector2Value    *Vector2    `json:"vector2_value,omitempty"`
-		Vector3Value    *Vector3    `json:"vector3_value,omitempty"`
-		ColorValue      *Color      `json:"color_value,omitempty"`
-		Vector2iValue   *Vector2i   `json:"vector2i_value,omitempty"`
-		Vector3iValue   *Vector3i   `json:"vector3i_value,omitempty"`
-		QuaternionValue *Quaternion `json:"quaternion_value,omitempty"`
-		Rect2Value      *Rect2      `json:"rect2_value,omitempty"`
-		Rect2iValue     *Rect2i     `json:"rect2i_value,omitempty"`
-		PlaneValue      *Plane      `json:"plane_value,omitempty"`
-		AABBValue       *AABB       `json:"aabb_value,omitempty"`
-		BasisValue      *Basis      `json:"basis_value,omitempty"`
+		Path             string       `json:"path"`
+		NodePath         string       `json:"node_path"`
+		PropertyName     string       `json:"property_name"`
+		StringValue      *string      `json:"string_value,omitempty"`
+		IntValue         *int64       `json:"int_value,omitempty"`
+		FloatValue       *float64     `json:"float_value,omitempty"`
+		BoolValue        *bool        `json:"bool_value,omitempty"`
+		Vector2Value     *Vector2     `json:"vector2_value,omitempty"`
+		Vector3Value     *Vector3     `json:"vector3_value,omitempty"`
+		ColorValue       *Color       `json:"color_value,omitempty"`
+		Vector2iValue    *Vector2i    `json:"vector2i_value,omitempty"`
+		Vector3iValue    *Vector3i    `json:"vector3i_value,omitempty"`
+		QuaternionValue  *Quaternion  `json:"quaternion_value,omitempty"`
+		Rect2Value       *Rect2       `json:"rect2_value,omitempty"`
+		Rect2iValue      *Rect2i      `json:"rect2i_value,omitempty"`
+		PlaneValue       *Plane       `json:"plane_value,omitempty"`
+		AABBValue        *AABB        `json:"aabb_value,omitempty"`
+		BasisValue       *Basis       `json:"basis_value,omitempty"`
+		Transform2DValue *Transform2D `json:"transform2d_value,omitempty"`
+		Transform3DValue *Transform3D `json:"transform3d_value,omitempty"`
 	}{
-		Path:            resPath,
-		NodePath:        params.NodePath,
-		PropertyName:    params.PropertyName,
-		StringValue:     params.StringValue,
-		IntValue:        params.IntValue,
-		FloatValue:      params.FloatValue,
-		BoolValue:       params.BoolValue,
-		Vector2Value:    params.Vector2Value,
-		Vector3Value:    params.Vector3Value,
-		ColorValue:      params.ColorValue,
-		Vector2iValue:   params.Vector2iValue,
-		Vector3iValue:   params.Vector3iValue,
-		QuaternionValue: params.QuaternionValue,
-		Rect2Value:      params.Rect2Value,
-		Rect2iValue:     params.Rect2iValue,
-		PlaneValue:      params.PlaneValue,
-		AABBValue:       params.AABBValue,
-		BasisValue:      params.BasisValue,
+		Path:             resPath,
+		NodePath:         params.NodePath,
+		PropertyName:     params.PropertyName,
+		StringValue:      params.StringValue,
+		IntValue:         params.IntValue,
+		FloatValue:       params.FloatValue,
+		BoolValue:        params.BoolValue,
+		Vector2Value:     params.Vector2Value,
+		Vector3Value:     params.Vector3Value,
+		ColorValue:       params.ColorValue,
+		Vector2iValue:    params.Vector2iValue,
+		Vector3iValue:    params.Vector3iValue,
+		QuaternionValue:  params.QuaternionValue,
+		Rect2Value:       params.Rect2Value,
+		Rect2iValue:      params.Rect2iValue,
+		PlaneValue:       params.PlaneValue,
+		AABBValue:        params.AABBValue,
+		BasisValue:       params.BasisValue,
+		Transform2DValue: params.Transform2DValue,
+		Transform3DValue: params.Transform3DValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

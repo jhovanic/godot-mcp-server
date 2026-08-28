@@ -1271,6 +1271,99 @@ func TestSetNodeProperty_BasisSuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_Transform2DSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "",
+			PropertyName:  "transform",
+			PreviousValue: "[X: (1, 0), Y: (0, 1), O: (0, 0)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "",
+			"property_name": "transform",
+			"transform2d_value": map[string]any{
+				"x":      map[string]any{"x": 1, "y": 0},
+				"y":      map[string]any{"x": 0, "y": 1},
+				"origin": map[string]any{"x": 10, "y": 20},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Transform2DValue
+	if got == nil || got.Origin.X != 10 || got.Origin.Y != 20 || got.X.X != 1 || got.Y.Y != 1 {
+		t.Fatalf("handler did not pass through transform2d_value, got %+v", got)
+	}
+}
+
+func TestSetNodeProperty_Transform3DSuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Cube",
+			PropertyName:  "transform",
+			PreviousValue: "[X: (1, 0, 0), Y: (0, 1, 0), Z: (0, 0, 1), O: (0, 0, 0)]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":    "main.tscn",
+			"node_path":     "Cube",
+			"property_name": "transform",
+			"transform3d_value": map[string]any{
+				"basis": map[string]any{
+					"x": map[string]any{"x": 2, "y": 0, "z": 0},
+					"y": map[string]any{"x": 0, "y": 3, "z": 0},
+					"z": map[string]any{"x": 0, "y": 0, "z": 4},
+				},
+				"origin": map[string]any{"x": 10, "y": 20, "z": 30},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.Transform3DValue
+	if got == nil || got.Origin.X != 10 || got.Origin.Y != 20 || got.Origin.Z != 30 || got.Basis.X.X != 2 || got.Basis.Y.Y != 3 || got.Basis.Z.Z != 4 {
+		t.Fatalf("handler did not pass through transform3d_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}
