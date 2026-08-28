@@ -3248,3 +3248,332 @@ func TestRemoveNode_RealGodot_PreservesSceneUID(t *testing.T) {
 		t.Errorf("saved scene lost the ext_resource uid: %s", data)
 	}
 }
+
+// TestReparentNode_RealGodot_MovedNodeKeepsItsChildren is the flagship test
+// for reparent_node: Node.reparent() is documented as equivalent to
+// remove_child() + add_child(), and remove_child() clears owner on the
+// removed node's entire subtree, which add_child() does not restore. If
+// _op_reparent_node's owner-restoration walk is wrong, a moved node's
+// children silently vanish from the *saved* scene (while staying present
+// in the live tree) — this test is what would catch that regression.
+func TestReparentNode_RealGodot_MovedNodeKeepsItsChildren(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	hitboxType := "CollisionShape2D"
+	if _, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "World/Player",
+		Name:           "Hitbox",
+		TypeName:       &hitboxType,
+	}); err != nil {
+		t.Fatalf("setup AddNode against a real Godot binary: %v", err)
+	}
+
+	result, err := c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "",
+	})
+	if err != nil {
+		t.Fatalf("ReparentNode against a real Godot binary: %v", err)
+	}
+	if result.PreviousParentNodePath != "World" {
+		t.Errorf("PreviousParentNodePath = %q, want %q", result.PreviousParentNodePath, "World")
+	}
+	if result.Name != "Player" {
+		t.Errorf("Name = %q, want %q", result.Name, "Player")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `name="Player" type="CharacterBody2D" parent="."`) {
+		t.Errorf("saved scene missing Player re-parented to the scene root: %s", data)
+	}
+	if !strings.Contains(string(data), `name="Hitbox" type="CollisionShape2D" parent="Player"`) {
+		t.Errorf("saved scene lost Player's child Hitbox after the move: %s", data)
+	}
+}
+
+func TestReparentNode_RealGodot_MovesLeafToNewParent(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "",
+	})
+	if err != nil {
+		t.Fatalf("ReparentNode against a real Godot binary: %v", err)
+	}
+	if result.PreviousParentNodePath != "World" {
+		t.Errorf("PreviousParentNodePath = %q, want %q", result.PreviousParentNodePath, "World")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if strings.Contains(string(data), `parent="World"`) {
+		t.Errorf("saved scene still parents something under World: %s", data)
+	}
+	if !strings.Contains(string(data), `name="Player" type="CharacterBody2D" parent="."`) {
+		t.Errorf("saved scene missing Player under the new parent: %s", data)
+	}
+	if !strings.Contains(string(data), `name="World" type="Node2D" parent="."`) {
+		t.Errorf("saved scene lost the untouched World node: %s", data)
+	}
+}
+
+func TestReparentNode_RealGodot_RenamesDuringMove(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	newName := "Hero"
+	result, err := c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "",
+		NewName:           &newName,
+	})
+	if err != nil {
+		t.Fatalf("ReparentNode against a real Godot binary: %v", err)
+	}
+	if result.Name != "Hero" {
+		t.Errorf("Name = %q, want %q", result.Name, "Hero")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `name="Hero" type="CharacterBody2D" parent="."`) {
+		t.Errorf("saved scene missing the renamed node: %s", data)
+	}
+}
+
+func TestReparentNode_RealGodot_AppliesIndex(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Add a third top-level node, then move it under World at index 0 — it
+	// should be serialized before Player, World's existing child.
+	thirdType := "Node2D"
+	if _, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "",
+		Name:           "Third",
+		TypeName:       &thirdType,
+	}); err != nil {
+		t.Fatalf("setup AddNode against a real Godot binary: %v", err)
+	}
+
+	zero := 0
+	_, err := c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Third",
+		NewParentNodePath: "World",
+		Index:             &zero,
+	})
+	if err != nil {
+		t.Fatalf("ReparentNode against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	thirdIdx := strings.Index(string(data), `name="Third"`)
+	playerIdx := strings.Index(string(data), `name="Player"`)
+	if thirdIdx == -1 || playerIdx == -1 {
+		t.Fatalf("saved scene missing Third and/or Player: %s", data)
+	}
+	if thirdIdx > playerIdx {
+		t.Errorf("Third (index 0) was not serialized before Player: %s", data)
+	}
+}
+
+func TestReparentNode_RealGodot_RejectsNameCollision(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Renaming Player to "World" while moving it to the scene root would
+	// collide with the existing top-level World node.
+	collidingName := "World"
+	_, err = c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "",
+		NewName:           &collidingName,
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with a colliding new_name against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+// TestReparentNode_RealGodot_RejectsCycle covers both degenerate cycle
+// cases: moving a node under itself, and moving a node under its own
+// descendant.
+func TestReparentNode_RealGodot_RejectsCycle(t *testing.T) {
+	tests := []struct {
+		name          string
+		newParentPath string
+	}{
+		{"under itself", "World"},
+		{"under its own descendant", "World/Player"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := nodeMutationFixtureClient(t)
+
+			before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+			if err != nil {
+				t.Fatalf("reading scene before the attempt: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			_, err = c.ReparentNode(ctx, ReparentNodeParams{
+				ScenePath:         "main.tscn",
+				NodePath:          "World",
+				NewParentNodePath: tt.newParentPath,
+			})
+			if err == nil {
+				t.Fatalf("ReparentNode moving World %s against a real Godot binary, want error", tt.name)
+			}
+
+			after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+			if err != nil {
+				t.Fatalf("reading scene after the attempt: %v", err)
+			}
+			if string(before) != string(after) {
+				t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+			}
+		})
+	}
+}
+
+func TestReparentNode_RealGodot_RejectsSceneRootAsNodePath(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          ".",
+		NewParentNodePath: "World",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode addressing the scene root via \".\" against a real Godot binary, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestReparentNode_RealGodot_RejectsNonexistentNewParent(t *testing.T) {
+	c := nodeMutationFixtureClient(t)
+
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene before the attempt: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err = c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "DoesNotExist",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode against a nonexistent new_parent_node_path, want error")
+	}
+
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading scene after the attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("scene was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+func TestReparentNode_RealGodot_PreservesSceneUID(t *testing.T) {
+	c := sceneUIDFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	containerType := "Node2D"
+	if _, err := c.AddNode(ctx, AddNodeParams{
+		ScenePath:      "main.tscn",
+		ParentNodePath: "",
+		Name:           "Container",
+		TypeName:       &containerType,
+	}); err != nil {
+		t.Fatalf("setup AddNode against a real Godot binary: %v", err)
+	}
+
+	_, err := c.ReparentNode(ctx, ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "Sprite",
+		NewParentNodePath: "Container",
+	})
+	if err != nil {
+		t.Fatalf("ReparentNode against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), `uid="uid://dp18m7gwcwhl0"`) {
+		t.Errorf("saved scene lost the gd_scene-level uid: %s", data)
+	}
+	if !strings.Contains(string(data), `uid="uid://b0i8615afj62o"`) {
+		t.Errorf("saved scene lost the ext_resource uid: %s", data)
+	}
+	if !strings.Contains(string(data), `name="Sprite" type="Sprite2D" parent="Container"`) {
+		t.Errorf("saved scene missing Sprite reparented under Container: %s", data)
+	}
+}

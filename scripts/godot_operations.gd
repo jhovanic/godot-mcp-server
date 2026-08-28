@@ -62,6 +62,8 @@ func _dispatch(request: Variant) -> Dictionary:
 			return _op_add_node(params)
 		"remove_node":
 			return _op_remove_node(params)
+		"reparent_node":
+			return _op_reparent_node(params)
 		_:
 			return _err("unknown operation: %s" % operation)
 
@@ -721,6 +723,133 @@ func _count_subtree(node: Node) -> int:
 	for child in node.get_children():
 		count += _count_subtree(child)
 	return count
+
+
+## reparent_node: loads a .tscn file (already-validated res:// path), moves
+## one node (and its entire subtree, unchanged) addressed by node_path to a
+## new parent addressed by new_parent_node_path (both relative to the scene
+## root), optionally renaming it and/or setting its child index under the
+## new parent, then re-packs and saves the scene.
+##
+## Node.reparent() is documented as equivalent to remove_child() on the old
+## parent followed by add_child() on the new one (plus transform upkeep),
+## and remove_child() clears `owner` on the removed node and every
+## descendant whose owner pointed at the tree it left — add_child() does
+## not restore it. Left alone, a moved node with children would silently
+## drop those children from the *saved* scene (still present in the live
+## tree, just no longer part of what pack() serializes). _restore_owner
+## below fixes this by walking the moved subtree afterward and setting
+## owner on any node whose owner came back null, without ever overwriting
+## a non-null owner — which also means a descendant that is itself the
+## root of a nested scene instance (its own internal ownership is never
+## null) is correctly left untouched, matching add_node's own "only the
+## instance's top node needs owner set, not what's inside it" rule.
+##
+## reparent() itself is a void call that fails silently (a push_error(), not
+## a catchable error) on an invalid move such as reparenting under one of
+## the node's own descendants, so every failure mode here is checked before
+## calling it, plus a read-back afterward as a backstop — the same "don't
+## let Godot's silent coercion look like success" discipline
+## _op_add_node's own name-collision backstop already applies.
+func _op_reparent_node(params: Variant) -> Dictionary:
+	if typeof(params) != TYPE_DICTIONARY or not params.has("path") or not params.has("node_path") or not params.has("new_parent_node_path"):
+		return _err("reparent_node: missing \"path\", \"node_path\" or \"new_parent_node_path\" param")
+
+	var path: String = params["path"]
+	var node_path: String = params["node_path"]
+	var new_parent_node_path: String = params["new_parent_node_path"]
+	if not path.begins_with("res://"):
+		return _err("reparent_node: path must be a res:// path")
+	if node_path.is_empty():
+		return _err("reparent_node: node_path must not be empty (moving the scene root is refused)")
+
+	var new_name: Variant = params.get("new_name")
+	var index: Variant = params.get("index")
+
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return _err("reparent_node: no scene resource at %s" % path)
+
+	var packed: PackedScene = load(path)
+	if packed == null:
+		return _err("reparent_node: failed to load %s" % path)
+
+	var root: Node = packed.instantiate()
+	if root == null:
+		return _err("reparent_node: failed to instantiate %s" % path)
+
+	var target: Node = root.get_node_or_null(NodePath(node_path))
+	if target == null:
+		root.free()
+		return _err("reparent_node: no node at %s" % node_path)
+	if target == root:
+		root.free()
+		return _err("reparent_node: node_path resolves to the scene root, which cannot be moved")
+
+	var new_parent: Node = root
+	if new_parent_node_path != "":
+		new_parent = root.get_node_or_null(NodePath(new_parent_node_path))
+	if new_parent == null:
+		root.free()
+		return _err("reparent_node: no node at %s" % new_parent_node_path)
+
+	# Cycle guard: walk new_parent's ancestor chain, starting at new_parent
+	# itself (so this also catches new_parent == target). reparent() would
+	# otherwise just push_error() and silently no-op on this.
+	var walker: Node = new_parent
+	while walker != null:
+		if walker == target:
+			root.free()
+			return _err("reparent_node: cannot move a node under itself or one of its own descendants")
+		walker = walker.get_parent()
+
+	var final_name: String = new_name if new_name != null else str(target.name)
+	var existing: Node = new_parent.get_node_or_null(NodePath(final_name))
+	if existing != null and existing != target:
+		root.free()
+		return _err("reparent_node: a node named %s already exists under %s" % [final_name, new_parent_node_path])
+
+	var old_parent: Node = target.get_parent()
+	var previous_parent_node_path: String = str(root.get_path_to(old_parent))
+	if previous_parent_node_path == ".":
+		previous_parent_node_path = ""
+
+	target.reparent(new_parent, true)
+	if new_name != null:
+		target.name = new_name
+
+	if target.get_parent() != new_parent or str(target.name) != final_name:
+		var actual_parent_desc: String = "null" if target.get_parent() == null else str(target.get_parent().name)
+		var actual_name: String = str(target.name)
+		root.free()
+		return _err("reparent_node: move did not take effect as requested (parent %s, name %s)" % [actual_parent_desc, actual_name])
+
+	_restore_owner_if_missing(target, root)
+
+	if index != null:
+		new_parent.move_child(target, int(index))
+
+	var new_packed := PackedScene.new()
+	var pack_err := new_packed.pack(root)
+	root.free()
+	if pack_err != OK:
+		return _err("reparent_node: failed to re-pack scene (error code %d)" % pack_err)
+
+	var save_err := ResourceSaver.save(new_packed, path)
+	if save_err != OK:
+		return _err("reparent_node: failed to save %s (error code %d)" % [path, save_err])
+
+	return {"ok": true, "result": {"name": final_name, "previous_parent_node_path": previous_parent_node_path}}
+
+
+## _restore_owner_if_missing recursively sets owner on node (and everything
+## under it) to new_owner, but only where the current owner is null — see
+## _op_reparent_node's doc comment for why this is needed and why it must
+## never overwrite an existing non-null owner.
+func _restore_owner_if_missing(node: Node, new_owner: Node) -> void:
+	if node != new_owner and node.owner == null:
+		node.owner = new_owner
+	for child in node.get_children():
+		_restore_owner_if_missing(child, new_owner)
 
 
 func _err(message: String) -> Dictionary:

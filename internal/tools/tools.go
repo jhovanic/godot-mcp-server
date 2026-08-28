@@ -114,6 +114,13 @@ type NodeRemover interface {
 	RemoveNode(ctx context.Context, params headless.RemoveNodeParams) (*headless.RemoveNodeResult, error)
 }
 
+// NodeReparenter is the narrow interface the reparent_node tool depends on.
+// Same risk tier as NodePropertySetter, NodeAdder, and NodeRemover — a
+// structural scene write, no script content is ever authored or attached.
+type NodeReparenter interface {
+	ReparentNode(ctx context.Context, params headless.ReparentNodeParams) (*headless.ReparentNodeResult, error)
+}
+
 // ScriptExportSetter is the narrow interface the set_script_export tool
 // depends on. *headless.Client satisfies it without ever invoking Godot
 // for the edit itself (see SetScriptExport's doc comment) — only for a
@@ -162,6 +169,7 @@ type Deps struct {
 	NodeProperty    NodePropertySetter
 	AddNode         NodeAdder
 	RemoveNode      NodeRemover
+	ReparentNode    NodeReparenter
 	ScriptExport    ScriptExportSetter
 	ScriptSignal    ScriptSignalSetter
 	ScriptIdentity  ScriptIdentitySetter
@@ -191,6 +199,7 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 		registerSetNodeProperty(server, deps)
 		registerAddNode(server, deps)
 		registerRemoveNode(server, deps)
+		registerReparentNode(server, deps)
 		registerSetScriptExport(server, deps)
 		registerSetScriptSignal(server, deps)
 		registerSetScriptIdentity(server, deps)
@@ -429,6 +438,41 @@ func registerRemoveNode(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		result, err := deps.RemoveNode.RemoveNode(ctx, args)
 		deps.Logger.LogResult("headless", "remove_node", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerReparentNode(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "reparent_node",
+		Description: "Write. Moves an existing node — and its entire subtree, unchanged — to " +
+			"a new parent within the same .tscn scene under the configured project root, then " +
+			"saves the scene. Optionally renames the node (new_name) and/or sets its child " +
+			"index under the new parent (index) as part of the move. Refuses to move the " +
+			"scene's own root node, to move a node under itself or one of its own descendants " +
+			"(which would create a cycle), or into a name collision with an existing sibling " +
+			"under the new parent — never silently renamed. This tool never checks or fixes up " +
+			"other nodes' NodePath-typed properties or signal connections that may have " +
+			"referenced the moved node by its old path. Fails, without modifying the scene, if " +
+			"the scene doesn't exist, node_path is empty or resolves to the scene root, the " +
+			"new parent doesn't exist, the move would create a cycle, or the resulting name " +
+			"collides with an existing sibling. Only ever available when the server was " +
+			"started with -mode read-write or -mode advanced.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.ReparentNodeParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.ReparentNode.ReparentNode(ctx, args)
+		deps.Logger.LogResult("headless", "reparent_node", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

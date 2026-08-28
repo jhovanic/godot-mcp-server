@@ -233,3 +233,105 @@ func TestRemoveNode_NonEmptyNodePathIsValid(t *testing.T) {
 		t.Fatalf("RemoveNode rejected a non-empty node_path as if it were empty: %v", err)
 	}
 }
+
+func TestReparentNode_RejectsOutOfRootScenePath(t *testing.T) {
+	c := newDirectReadTestClient(t, t.TempDir())
+
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath:         "../outside.tscn",
+		NodePath:          "World/Player",
+		NewParentNodePath: "",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with a traversal scene_path, want error")
+	}
+	if !errors.Is(err, validate.ErrOutsideRoot) {
+		t.Fatalf("ReparentNode error = %v, want wrapping validate.ErrOutsideRoot", err)
+	}
+}
+
+func TestReparentNode_RejectsNonTscnExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not a scene"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath: "notes.txt",
+		NodePath:  "World/Player",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode on a non-.tscn file, want error")
+	}
+}
+
+func TestReparentNode_RejectsEmptyNodePath(t *testing.T) {
+	dir := t.TempDir()
+	writeNodeMutationFixtureScene(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with an empty node_path, want error")
+	}
+}
+
+func TestReparentNode_RejectsEmptyNewName(t *testing.T) {
+	dir := t.TempDir()
+	writeNodeMutationFixtureScene(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	empty := ""
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath: "main.tscn",
+		NodePath:  "World",
+		NewName:   &empty,
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with an empty (non-nil) new_name, want error")
+	}
+}
+
+func TestReparentNode_NonEmptyNodePathIsValid(t *testing.T) {
+	dir := t.TempDir()
+	writeNodeMutationFixtureScene(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World",
+		NewParentNodePath: "Elsewhere",
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with a non-empty node_path and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "node_path is required") {
+		t.Fatalf("ReparentNode rejected a non-empty node_path as if it were empty: %v", err)
+	}
+}
+
+func TestReparentNode_WithNewNameAndIndexIsValid(t *testing.T) {
+	dir := t.TempDir()
+	writeNodeMutationFixtureScene(t, dir)
+	c := newDirectReadTestClient(t, dir)
+
+	newName := "Renamed"
+	index := 0
+	_, err := c.ReparentNode(context.Background(), ReparentNodeParams{
+		ScenePath:         "main.tscn",
+		NodePath:          "World",
+		NewParentNodePath: "",
+		NewName:           &newName,
+		Index:             &index,
+	})
+	if err == nil {
+		t.Fatal("ReparentNode with new_name/index set and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "new_name") {
+		t.Fatalf("ReparentNode rejected a valid non-empty new_name: %v", err)
+	}
+}

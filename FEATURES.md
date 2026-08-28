@@ -309,6 +309,28 @@ changelog.
           NodePath-typed properties or signal connections that may reference the affected node —
           same "cross-reference correctness is not this tool's job" division of responsibility
           already documented for `set_script_identity`.
+- [x] `reparent_node` — moves an existing node (and its entire subtree, unchanged) to a new parent
+      within the same scene, optionally renaming it and/or setting its child index as part of the
+      move. Same risk tier and `-mode read-write` gating as `add_node`/`remove_node`. Built on
+      `Node.reparent()`, which is documented as equivalent to `remove_child()` + `add_child()` (plus
+      transform upkeep) — and `remove_child()` clears `owner` on the removed node's entire subtree,
+      which `add_child()` does not restore. Confirmed empirically against a real Godot 4.7.2 binary
+      that this is a real risk (a moved node's children would otherwise silently vanish from the
+      *saved* scene while staying present in the live tree), fixed by walking the moved subtree
+      afterward and setting `owner` on any node whose owner came back `null` — never overwriting a
+      non-`null` owner, so a descendant that is itself a nested scene instance's own root (its
+      internal ownership is never `null`) is correctly left alone, matching `add_node`'s own "only
+      the instance's top node needs owner set" rule. `reparent()` itself is a `void` call that fails
+      silently (`push_error()`, not a catchable error) on an invalid move, so every failure mode
+      (moving the scene root, moving a node under itself or one of its own descendants, moving into
+      a name collision under the new parent) is checked before calling it, plus a parent/name
+      read-back afterward as a backstop — the same "don't let Godot's silent coercion look like
+      success" discipline already applied elsewhere. Renaming happens *after* reparenting rather
+      than before, specifically to avoid checking a name collision against the wrong parent's
+      siblings during the transition. `keep_global_transform` is not exposed as a parameter — always
+      `true`, matching the editor's own drag-and-drop default. Same cross-reference disclaimer as
+      `remove_node`: does not check or fix up other nodes' NodePath-typed properties or signal
+      connections that may reference the moved node by its old path.
 
 ### TCP runtime tier
 - [ ] Autoload listener script (localhost-only) for live editor/game state

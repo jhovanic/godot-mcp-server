@@ -247,3 +247,124 @@ func (c *Client) RemoveNode(ctx context.Context, params RemoveNodeParams) (*Remo
 		RemovedNodeCount: result.RemovedNodeCount,
 	}, nil
 }
+
+// ReparentNodeParams are the parameters for the reparent_node operation.
+type ReparentNodeParams struct {
+	// ScenePath is the .tscn path, relative to the project root. Validated
+	// against Root before use. The scene must already exist.
+	ScenePath string `json:"scene_path" jsonschema:"path to an existing .tscn scene file, relative to the project root"`
+	// NodePath addresses the node to move, relative to the scene root,
+	// using Godot's own NodePath syntax. Must not be empty: moving the
+	// scene's own root node is refused outright, the same guard
+	// remove_node applies.
+	NodePath string `json:"node_path" jsonschema:"the node to move, relative to the scene root, using Godot's own NodePath syntax; must not be empty (moving the scene root itself is refused)"`
+	// NewParentNodePath addresses the destination parent, relative to the
+	// scene root. Empty string means the scene root itself.
+	NewParentNodePath string `json:"new_parent_node_path" jsonschema:"the node's new parent, relative to the scene root, using Godot's own NodePath syntax; empty string means the scene root itself"`
+	// NewName optionally renames the node as part of the move. Nil keeps
+	// the current name. Either way, a name that collides with an existing
+	// sibling under the new parent is rejected outright, never silently
+	// renamed — the same policy add_node already applies.
+	NewName *string `json:"new_name,omitempty" jsonschema:"optionally rename the node as part of the move; nil keeps its current name; rejected if it collides with an existing sibling under new_parent_node_path"`
+	// Index optionally sets the node's 0-based child position under the
+	// new parent. Nil means Godot's own default placement (appended at
+	// the end).
+	Index *int `json:"index,omitempty" jsonschema:"optional 0-based child index under the new parent; nil appends at the end"`
+}
+
+// ReparentNodeResult confirms a completed node move.
+type ReparentNodeResult struct {
+	// Path is the scene's res://-style path.
+	Path string `json:"path"`
+	// NodePath is echoed back from the request for confirmation — the
+	// node's address *before* the move, now stale as an address since the
+	// node lives elsewhere afterward.
+	NodePath string `json:"node_path"`
+	// NewParentNodePath is echoed back from the request for confirmation.
+	NewParentNodePath string `json:"new_parent_node_path"`
+	// PreviousParentNodePath is the node's parent immediately before the
+	// move, for audit purposes.
+	PreviousParentNodePath string `json:"previous_parent_node_path"`
+	// Name is the node's final name after the move — equal to NewName if
+	// it was given, otherwise the node's unchanged existing name.
+	Name string `json:"name"`
+}
+
+// ReparentNode loads an existing .tscn file headlessly, moves one node (and
+// its entire subtree, unchanged) to a new parent within the same scene, and
+// saves the scene back to disk. Refuses to move the scene root, to move a
+// node under itself or one of its own descendants (which would create a
+// cycle), or into a name collision with an existing sibling under the new
+// parent. This tool never checks or fixes up other nodes' NodePath-typed
+// properties or signal connections that may have referenced the moved node
+// by its old path — the same "cross-reference correctness is not this
+// tool's job" division of responsibility already documented for
+// remove_node and set_script_identity.
+func (c *Client) ReparentNode(ctx context.Context, params ReparentNodeParams) (*ReparentNodeResult, error) {
+	absScenePath, err := c.Root.Resolve(params.ScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: %w", err)
+	}
+	if filepath.Ext(absScenePath) != ".tscn" {
+		return nil, fmt.Errorf("headless: reparent_node: not a .tscn file: %s", params.ScenePath)
+	}
+	if params.NodePath == "" {
+		return nil, errors.New("headless: reparent_node: node_path is required (moving the scene root is refused)")
+	}
+	if params.NewName != nil && *params.NewName == "" {
+		return nil, errors.New("headless: reparent_node: new_name must not be empty")
+	}
+
+	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: computing project-relative path: %w", err)
+	}
+	resPath := "res://" + filepath.ToSlash(relScenePath)
+
+	sceneInfo, err := os.Stat(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: %w", err)
+	}
+	originalScene, err := os.ReadFile(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: %w", err)
+	}
+
+	var result struct {
+		Name                   string `json:"name"`
+		PreviousParentNodePath string `json:"previous_parent_node_path"`
+	}
+	if err := c.run(ctx, "reparent_node", struct {
+		Path              string  `json:"path"`
+		NodePath          string  `json:"node_path"`
+		NewParentNodePath string  `json:"new_parent_node_path"`
+		NewName           *string `json:"new_name,omitempty"`
+		Index             *int    `json:"index,omitempty"`
+	}{
+		Path:              resPath,
+		NodePath:          params.NodePath,
+		NewParentNodePath: params.NewParentNodePath,
+		NewName:           params.NewName,
+		Index:             params.Index,
+	}, &result); err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: %w", err)
+	}
+
+	updatedScene, err := os.ReadFile(absScenePath)
+	if err != nil {
+		return nil, fmt.Errorf("headless: reparent_node: reading saved scene to restore any dropped uid attributes: %w", err)
+	}
+	if patched, changed := preserveSceneUIDs(string(originalScene), string(updatedScene)); changed {
+		if err := os.WriteFile(absScenePath, []byte(patched), sceneInfo.Mode().Perm()); err != nil {
+			return nil, fmt.Errorf("headless: reparent_node: restoring dropped uid attributes: %w", err)
+		}
+	}
+
+	return &ReparentNodeResult{
+		Path:                   resPath,
+		NodePath:               params.NodePath,
+		NewParentNodePath:      params.NewParentNodePath,
+		PreviousParentNodePath: result.PreviousParentNodePath,
+		Name:                   result.Name,
+	}, nil
+}

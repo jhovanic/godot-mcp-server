@@ -122,6 +122,18 @@ func (f *fakeNodeRemover) RemoveNode(_ context.Context, params headless.RemoveNo
 	return f.result, f.err
 }
 
+// fakeNodeReparenter is a test double for tools.NodeReparenter.
+type fakeNodeReparenter struct {
+	gotParams headless.ReparentNodeParams
+	result    *headless.ReparentNodeResult
+	err       error
+}
+
+func (f *fakeNodeReparenter) ReparentNode(_ context.Context, params headless.ReparentNodeParams) (*headless.ReparentNodeResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
 // fakeScriptExportSetter is a test double for tools.ScriptExportSetter.
 type fakeScriptExportSetter struct {
 	gotParams headless.SetScriptExportParams
@@ -756,6 +768,7 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 		NodeProperty:    &fakeNodePropertySetter{},
 		AddNode:         &fakeNodeAdder{},
 		RemoveNode:      &fakeNodeRemover{},
+		ReparentNode:    &fakeNodeReparenter{},
 		ScriptExport:    &fakeScriptExportSetter{},
 		ScriptSignal:    &fakeScriptSignalSetter{},
 		ScriptIdentity:  &fakeScriptIdentitySetter{},
@@ -772,6 +785,7 @@ var readWriteToolNames = map[string]bool{
 	"set_node_property":   true,
 	"add_node":            true,
 	"remove_node":         true,
+	"reparent_node":       true,
 	"set_script_export":   true,
 	"set_script_signal":   true,
 	"set_script_identity": true,
@@ -2250,6 +2264,118 @@ func TestRemoveNode_NotRegisteredUnderReadOnly(t *testing.T) {
 	for _, tl := range list.Tools {
 		if tl.Name == "remove_node" {
 			t.Fatal("remove_node was advertised under ModeReadOnly")
+		}
+	}
+}
+
+func TestReparentNode_Success(t *testing.T) {
+	reparenter := &fakeNodeReparenter{
+		result: &headless.ReparentNodeResult{
+			Path:                   "res://main.tscn",
+			NodePath:               "World/Player",
+			NewParentNodePath:      "",
+			PreviousParentNodePath: "World",
+			Name:                   "Player",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ReparentNode = reparenter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "reparent_node",
+		Arguments: map[string]any{
+			"scene_path":           "main.tscn",
+			"node_path":            "World/Player",
+			"new_parent_node_path": "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reparenter.gotParams.ScenePath != "main.tscn" || reparenter.gotParams.NodePath != "World/Player" {
+		t.Fatalf("handler did not pass through params, got %+v", reparenter.gotParams)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "reparent_node" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "reparent_node")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestReparentNode_Error(t *testing.T) {
+	wantErr := errors.New("boom: no node at World/Player")
+	reparenter := &fakeNodeReparenter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.ReparentNode = reparenter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "reparent_node",
+		Arguments: map[string]any{
+			"scene_path":           "main.tscn",
+			"node_path":            "World/Player",
+			"new_parent_node_path": "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestReparentNode_NotRegisteredUnderReadOnly confirms reparent_node is a
+// write tool: never advertised to the MCP client under ModeReadOnly.
+func TestReparentNode_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "reparent_node" {
+			t.Fatal("reparent_node was advertised under ModeReadOnly")
 		}
 	}
 }

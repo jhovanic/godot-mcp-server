@@ -174,6 +174,7 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		NodeProperty:    headlessClient,
 		AddNode:         headlessClient,
 		RemoveNode:      headlessClient,
+		ReparentNode:    headlessClient,
 		ScriptExport:    headlessClient,
 		ScriptSignal:    headlessClient,
 		ScriptIdentity:  headlessClient,
