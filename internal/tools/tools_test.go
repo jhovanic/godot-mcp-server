@@ -1445,6 +1445,47 @@ func TestSetNodeProperty_StringArraySuccess(t *testing.T) {
 	}
 }
 
+func TestSetNodeProperty_IntArraySuccess(t *testing.T) {
+	setter := &fakeNodePropertySetter{
+		result: &headless.SetNodePropertyResult{
+			Path:          "res://main.tscn",
+			NodePath:      "Split",
+			PropertyName:  "split_offsets",
+			PreviousValue: "[]",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.NodeProperty = setter
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "set_node_property",
+		Arguments: map[string]any{
+			"scene_path":      "main.tscn",
+			"node_path":       "Split",
+			"property_name":   "split_offsets",
+			"int_array_value": []any{10, -20, 30},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	got := setter.gotParams.IntArrayValue
+	if len(got) != 3 || got[0] != 10 || got[1] != -20 || got[2] != 30 {
+		t.Fatalf("handler did not pass through int_array_value, got %+v", got)
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

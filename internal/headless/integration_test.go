@@ -270,11 +270,12 @@ func writeMinimalPNG(t *testing.T, path string) {
 // any coordinate outside the configured frame grid), "IntGrid" (a plain
 // Node with the fixture's own custom_props_holder.gd script attached), and
 // "Remote" (a RemoteTransform2D, which carries a real NodePath property in
-// remote_path), and "Spawner" (a MultiplayerSpawner, which carries a real
+// remote_path), "Spawner" (a MultiplayerSpawner, which carries a real
 // PackedStringArray property in _spawnable_scenes — underscore-prefixed,
 // but genuinely a public ClassDB property, not a private implementation
-// detail) — between them, every value type SetNodeProperty supports has a
-// genuine target property to exercise.
+// detail), and "Split" (a SplitContainer, which carries a real
+// PackedInt32Array property in split_offsets) — between them, every value
+// type SetNodeProperty supports has a genuine target property to exercise.
 //
 // Vector3i and Plane are the two types with no built-in Node target at all:
 // no built-in Node class exposes either property type (verified against a
@@ -334,6 +335,11 @@ func _init() -> void:
 	spawner.name = "Spawner"
 	main.add_child(spawner)
 	spawner.owner = main
+
+	var split := SplitContainer.new()
+	split.name = "Split"
+	main.add_child(split)
+	split.owner = main
 
 	var packed := PackedScene.new()
 	var pack_err := packed.pack(main)
@@ -800,6 +806,75 @@ func TestSetNodeProperty_RealGodot_EmptyStringArray(t *testing.T) {
 	}
 	if strings.Contains(string(data), "_spawnable_scenes") {
 		t.Errorf("saved scene still has _spawnable_scenes after clearing it to an empty array: %s", data)
+	}
+}
+
+func TestSetNodeProperty_RealGodot_IntArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Split",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{10, -20, 30},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "split_offsets = PackedInt32Array(10, -20, 30)") {
+		t.Errorf("saved scene missing expected split_offsets property: %s", data)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_EmptyIntArray mirrors
+// TestSetNodeProperty_RealGodot_EmptyStringArray above: an explicitly empty
+// IntArrayValue must round-trip as "clear this array", not be dropped from
+// the request the way "omitempty" (rather than "omitzero") would have
+// dropped it — see IntArrayValue's doc comment. Unlike
+// MultiplayerSpawner's _spawnable_scenes, though, an empty split_offsets
+// isn't omitted from the saved scene as matching some default — Godot still
+// writes it explicitly as "PackedInt32Array()", so the assertion here is on
+// that explicit empty form, not on the property's absence.
+func TestSetNodeProperty_RealGodot_EmptyIntArray(t *testing.T) {
+	c := setNodePropertyFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Split",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{10},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (initial non-empty set) against a real Godot binary: %v", err)
+	}
+
+	_, err = c.SetNodeProperty(ctx, SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		NodePath:      "Split",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{},
+	})
+	if err != nil {
+		t.Fatalf("SetNodeProperty (clearing to an empty array) against a real Godot binary: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+	if err != nil {
+		t.Fatalf("reading saved scene: %v", err)
+	}
+	if !strings.Contains(string(data), "split_offsets = PackedInt32Array()") {
+		t.Errorf("saved scene missing expected empty split_offsets property: %s", data)
 	}
 }
 

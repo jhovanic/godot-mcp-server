@@ -1142,6 +1142,70 @@ func TestSetNodeProperty_RejectsStringArrayPlusOtherValue(t *testing.T) {
 	}
 }
 
+// IntArrayValue has the same nil-vs-empty-slice nuance as StringArrayValue
+// above (see SetNodePropertyParams.IntArrayValue's doc comment), and
+// participates in the same "exactly one *_value field" count as every
+// other value field.
+
+func TestSetNodeProperty_IntArrayAloneIsValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{10, -20, 30},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with a lone int_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected a lone int_array_value as if zero/multiple values were set: %v", err)
+	}
+}
+
+func TestSetNodeProperty_EmptyIntArrayIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{},
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with an explicitly empty int_array_value and a garbage GodotBin, want an exec error")
+	}
+	if strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("SetNodeProperty rejected an explicitly empty int_array_value as if it were unset: %v", err)
+	}
+}
+
+func TestSetNodeProperty_RejectsIntArrayPlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	intVal := int64(1)
+	_, err := c.SetNodeProperty(context.Background(), SetNodePropertyParams{
+		ScenePath:     "main.tscn",
+		PropertyName:  "split_offsets",
+		IntArrayValue: []int64{10},
+		IntValue:      &intVal,
+	})
+	if err == nil {
+		t.Fatal("SetNodeProperty with int_array_value and int_value both set, want error")
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable
