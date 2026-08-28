@@ -141,16 +141,19 @@ func _op_read_binary_resource(params: Variant) -> Dictionary:
 ## Vector2i/Vector3i/Quaternion/Rect2/Rect2i/Plane/AABB/Basis/Transform2D/
 ## Transform3D/NodePath/PackedStringArray/PackedInt32Array/
 ## PackedFloat32Array/PackedVector2Array/PackedColorArray/
-## PackedVector3Array/Array[NodePath]/Resource — the caller sends exactly
-## one of string_value/int_value/float_value/bool_value/vector2_value/
-## vector3_value/color_value/vector2i_value/vector3i_value/
+## PackedVector3Array/Array[NodePath]/Resource/Array[String]/Array[int]/
+## Array[float]/Array[Vector2]/Array[Color]/Array[Vector3] — the caller
+## sends exactly one of string_value/int_value/float_value/bool_value/
+## vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/
 ## quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/
 ## basis_value/transform2d_value/transform3d_value/node_path_value/
 ## string_array_value/int_array_value/float_array_value/
 ## vector2_array_value/color_array_value/vector3_array_value/
-## node_path_array_value/resource_value) on one node addressed by node_path
-## (relative to the scene root; empty string means the root itself), then
-## re-packs and saves the scene.
+## node_path_array_value/resource_value/typed_string_array_value/
+## typed_int_array_value/typed_float_array_value/typed_vector2_array_value/
+## typed_color_array_value/typed_vector3_array_value) on one node addressed
+## by node_path (relative to the scene root; empty string means the root
+## itself), then re-packs and saves the scene.
 ##
 ## property_name "script" is refused unconditionally, regardless of which
 ## *_value field is sent: assigning a Script is code execution, not a data
@@ -332,8 +335,59 @@ func _op_set_node_property(params: Variant) -> Dictionary:
 			return _err("set_node_property: failed to load resource at %s" % res_path)
 		value = loaded_resource
 		values_set += 1
+	# The six Typed*ArrayValue branches below build a genuine typed
+	# Array[T], the same way Array[NodePath] does above — not the
+	# corresponding Packed*Array constructor. Reusing e.g. PackedStringArray
+	# here would let Object.set() coerce it into the property's declared
+	# Array[String] silently, but then the post-set "actual != value" check
+	# below would compare an Array against a PackedStringArray, which
+	# GDScript's != operator raises a runtime error on instead of
+	# evaluating — a real crash reproduced while building this, not a
+	# hypothetical one.
+	if params.get("typed_string_array_value") != null:
+		var tsa_items: Array = params["typed_string_array_value"]
+		var tsa_list: Array[String] = []
+		for tsa_item in tsa_items:
+			tsa_list.append(str(tsa_item))
+		value = tsa_list
+		values_set += 1
+	if params.get("typed_int_array_value") != null:
+		var tia_items: Array = params["typed_int_array_value"]
+		var tia_list: Array[int] = []
+		for tia_item in tia_items:
+			tia_list.append(int(tia_item))
+		value = tia_list
+		values_set += 1
+	if params.get("typed_float_array_value") != null:
+		var tfa_items: Array = params["typed_float_array_value"]
+		var tfa_list: Array[float] = []
+		for tfa_item in tfa_items:
+			tfa_list.append(float(tfa_item))
+		value = tfa_list
+		values_set += 1
+	if params.get("typed_vector2_array_value") != null:
+		var tv2a_items: Array = params["typed_vector2_array_value"]
+		var tv2a_list: Array[Vector2] = []
+		for tv2a_item in tv2a_items:
+			tv2a_list.append(Vector2(float(tv2a_item.get("x", 0.0)), float(tv2a_item.get("y", 0.0))))
+		value = tv2a_list
+		values_set += 1
+	if params.get("typed_color_array_value") != null:
+		var tca_items: Array = params["typed_color_array_value"]
+		var tca_list: Array[Color] = []
+		for tca_item in tca_items:
+			tca_list.append(Color(float(tca_item.get("r", 0.0)), float(tca_item.get("g", 0.0)), float(tca_item.get("b", 0.0)), float(tca_item.get("a", 1.0))))
+		value = tca_list
+		values_set += 1
+	if params.get("typed_vector3_array_value") != null:
+		var tv3a_items: Array = params["typed_vector3_array_value"]
+		var tv3a_list: Array[Vector3] = []
+		for tv3a_item in tv3a_items:
+			tv3a_list.append(Vector3(float(tv3a_item.get("x", 0.0)), float(tv3a_item.get("y", 0.0)), float(tv3a_item.get("z", 0.0))))
+		value = tv3a_list
+		values_set += 1
 	if values_set != 1:
-		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value/resource_value must be set")
+		return _err("set_node_property: exactly one of string_value/int_value/float_value/bool_value/vector2_value/vector3_value/color_value/vector2i_value/vector3i_value/quaternion_value/rect2_value/rect2i_value/plane_value/aabb_value/basis_value/transform2d_value/transform3d_value/node_path_value/string_array_value/int_array_value/float_array_value/vector2_array_value/color_array_value/vector3_array_value/node_path_array_value/resource_value/typed_string_array_value/typed_int_array_value/typed_float_array_value/typed_vector2_array_value/typed_color_array_value/typed_vector3_array_value must be set")
 
 	if not ResourceLoader.exists(path, "PackedScene"):
 		return _err("set_node_property: no scene resource at %s" % path)

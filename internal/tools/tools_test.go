@@ -1741,6 +1741,120 @@ func TestSetNodeProperty_ResourceValueSuccess(t *testing.T) {
 	}
 }
 
+// TestSetNodeProperty_TypedArrayValuesSuccess checks that all six
+// Typed*ArrayValue fields make it from the MCP request arguments through to
+// headless.SetNodePropertyParams unchanged, table-driven since the shape of
+// the check is identical across all six element types.
+func TestSetNodeProperty_TypedArrayValuesSuccess(t *testing.T) {
+	tests := []struct {
+		name     string
+		argKey   string
+		argValue any
+		check    func(t *testing.T, got headless.SetNodePropertyParams)
+	}{
+		{
+			name:     "TypedStringArrayValue",
+			argKey:   "typed_string_array_value",
+			argValue: []any{"a", "b"},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedStringArrayValue) != 2 || got.TypedStringArrayValue[0] != "a" || got.TypedStringArrayValue[1] != "b" {
+					t.Fatalf("handler did not pass through typed_string_array_value, got %+v", got.TypedStringArrayValue)
+				}
+			},
+		},
+		{
+			name:     "TypedIntArrayValue",
+			argKey:   "typed_int_array_value",
+			argValue: []any{1, 2},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedIntArrayValue) != 2 || got.TypedIntArrayValue[0] != 1 || got.TypedIntArrayValue[1] != 2 {
+					t.Fatalf("handler did not pass through typed_int_array_value, got %+v", got.TypedIntArrayValue)
+				}
+			},
+		},
+		{
+			name:     "TypedFloatArrayValue",
+			argKey:   "typed_float_array_value",
+			argValue: []any{1.5, 2.5},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedFloatArrayValue) != 2 || got.TypedFloatArrayValue[0] != 1.5 || got.TypedFloatArrayValue[1] != 2.5 {
+					t.Fatalf("handler did not pass through typed_float_array_value, got %+v", got.TypedFloatArrayValue)
+				}
+			},
+		},
+		{
+			name:     "TypedVector2ArrayValue",
+			argKey:   "typed_vector2_array_value",
+			argValue: []any{map[string]any{"x": 1.0, "y": 2.0}},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedVector2ArrayValue) != 1 || got.TypedVector2ArrayValue[0] != (headless.Vector2{X: 1, Y: 2}) {
+					t.Fatalf("handler did not pass through typed_vector2_array_value, got %+v", got.TypedVector2ArrayValue)
+				}
+			},
+		},
+		{
+			name:     "TypedColorArrayValue",
+			argKey:   "typed_color_array_value",
+			argValue: []any{map[string]any{"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedColorArrayValue) != 1 || got.TypedColorArrayValue[0] != (headless.Color{R: 1, G: 0, B: 0, A: 1}) {
+					t.Fatalf("handler did not pass through typed_color_array_value, got %+v", got.TypedColorArrayValue)
+				}
+			},
+		},
+		{
+			name:     "TypedVector3ArrayValue",
+			argKey:   "typed_vector3_array_value",
+			argValue: []any{map[string]any{"x": 1.0, "y": 2.0, "z": 3.0}},
+			check: func(t *testing.T, got headless.SetNodePropertyParams) {
+				if len(got.TypedVector3ArrayValue) != 1 || got.TypedVector3ArrayValue[0] != (headless.Vector3{X: 1, Y: 2, Z: 3}) {
+					t.Fatalf("handler did not pass through typed_vector3_array_value, got %+v", got.TypedVector3ArrayValue)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setter := &fakeNodePropertySetter{
+				result: &headless.SetNodePropertyResult{
+					Path:          "res://main.tscn",
+					NodePath:      "IntGrid",
+					PropertyName:  "some_property",
+					PreviousValue: "[]",
+				},
+			}
+			var logBuf bytes.Buffer
+			logger := audit.New(&logBuf)
+
+			deps := fullDeps(logger, tools.ModeReadWrite)
+			deps.NodeProperty = setter
+			server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+			tools.RegisterAll(server, deps)
+
+			cs := connect(t, server)
+			ctx := context.Background()
+
+			res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+				Name: "set_node_property",
+				Arguments: map[string]any{
+					"scene_path":    "main.tscn",
+					"node_path":     "IntGrid",
+					"property_name": "some_property",
+					tt.argKey:       tt.argValue,
+				},
+			})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+			}
+			tt.check(t, setter.gotParams)
+		})
+	}
+}
+
 func TestSetNodeProperty_Error(t *testing.T) {
 	wantErr := errors.New("boom: no node at Label")
 	setter := &fakeNodePropertySetter{err: wantErr}

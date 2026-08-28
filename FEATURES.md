@@ -57,13 +57,15 @@ changelog.
       minimal diff (see `internal/headless.Client.SetNodeProperty`'s doc comment). Value types,
       roughly ordered from simplest to implement to most complex — which also tends to track how
       commonly each is actually needed on a node property, so this list doubles as a priority
-      order for what to build next. Decided (2026-08-27): with the resource-reference item below
-      now landed, value-type coverage stops there for now — primitives, the fixed-arity structs,
-      the primitive/vector/color packed arrays, `Array[NodePath]`, and external resource-file
-      references are enough real-world coverage per-field GDScript implementation cost. The
-      remaining items below (`PackedByteArray`, `PackedInt64Array`/`PackedFloat64Array`/
-      `PackedVector4Array`, `Array[String]`/`Array[Resource]`) stay deliberately unimplemented
-      until actual tool usage shows a property that needs one, not built ahead of demand:
+      order for what to build next. Decided (2026-08-27), then revised same day once the
+      `Array[T]`/`Packed*Array` split turned out to hide a real bug (see the `Array[String]` note
+      below), not just a missing nice-to-have: coverage now includes primitives, the fixed-arity
+      structs, the primitive/vector/color packed arrays, external resource-file references, and
+      every typed-`Array[T]` element type with an existing `Packed*Array` or scalar sibling
+      (`NodePath`/`String`/`int`/`float`/`Vector2`/`Color`/`Vector3`). The freeze still holds for
+      what's left below (`PackedByteArray`, `PackedInt64Array`/`PackedFloat64Array`/
+      `PackedVector4Array`, `Array[Resource]`) — those stay deliberately unimplemented until
+      actual tool usage shows a property that needs one, not built ahead of demand:
     - [x] Primitives: string, int, float, bool (int also covers Godot's int-backed enums, since
           `Object.set()` takes the raw int either way — no separate enum type needed)
     - [x] Vector2 (2D position, scale, size, ...)
@@ -121,18 +123,38 @@ changelog.
           `Packed*Array` family above (a generic `Array` carrying element-type metadata, not a
           native packed array), so this is its own item, not a `Packed*Array` variant. Note: the
           genericness is in the engine's type system only — neither `SetNodePropertyParams` nor
-          `_op_set_node_property` has any generic "any `T`" path; each element type is its own Go
-          field and its own hand-written GDScript branch, same as every fixed-arity value type
-          above. `Array[NodePath]` below is the only one actually implemented so far:
+          `_op_set_node_property` has any generic "any `T`" path; each element type below is its
+          own Go field and its own hand-written GDScript branch, same as every fixed-arity value
+          type above. `String`/`int`/`float`/`Vector2`/`Color`/`Vector3`/`NodePath` (2026-08-27)
+          are the complete set of element types with an existing `Packed*Array` or scalar
+          sibling; none of the seven has a built-in Node property target (verified via ClassDB
+          introspection against a real build, same as `Vector3i`/`Plane` above), so
+          `custom_props_holder.gd`'s exported properties are the real-Godot test target for all
+          of them, same as those two:
         - [x] `Array[NodePath]` — same trust boundary as the existing scalar `NodePathValue`
               (addresses nodes already in the loaded scene tree, not the filesystem)
-        - [ ] `Array[String]`/`Array[Resource]` holding resource paths or loaded resource
-              references — still parked, but no longer blocked on an undecided resource-reference
-              conversation: that conversation (see "Resource / sub-resource references" below) is
-              now settled for the scalar case. Once a scalar `ResourceValue` field exists,
-              `Array[Resource]` of external-file references can follow the same pattern;
-              `Array[String]` holding raw (unloaded) resource path strings is a separate, weaker
-              semantic still to be decided
+        - [x] `Array[String]` — reusing `StringArrayValue`'s `PackedStringArray` here instead of a
+              dedicated `Array[String]` value would have been a real, reproduced bug, not just a
+              missed optimization: `Object.set()` silently coerces a `PackedStringArray` into an
+              `Array[String]`-typed property, but the post-set `actual != value` verification then
+              compares an `Array` against a `PackedStringArray`, which GDScript's `!=` operator
+              raises a runtime error on instead of evaluating — crashing `_op_set_node_property`
+              mid-request and returning a malformed response instead of a clean error. A note the
+              string content might itself be a `res://` path changes nothing here: the property's
+              declared type is `String`, not `Resource`, so nothing loads and no resource-specific
+              handling applies — an AI caller can already pass `res://`-shaped strings as ordinary
+              elements
+        - [x] `Array[int]`, `Array[float]`, `Array[Vector2]`, `Array[Color]`, `Array[Vector3]` —
+              same shape as `Array[String]`/`Array[NodePath]` above, no new design questions
+        - [ ] `Array[Resource]` holding loaded resource references — no longer blocked on an
+              undecided resource-reference conversation (see "Resource / sub-resource references"
+              below, now settled for the scalar case), but its type-check-before-set needs new,
+              unverified introspection: a typed array's declared element class lives in
+              `hint_string` on a `PROPERTY_HINT_ARRAY_TYPE` property-list entry (confirmed via
+              ClassDB probe: plain class name, e.g. `"NodePath"` — not the `"24/17:ClassName"`
+              encoding a scalar `Resource`-typed property uses), a different code path from
+              `ResourceValue`'s `class_name`-based check, not yet verified end-to-end against a
+              real build
     - [x] Resource / sub-resource references (Texture2D, Material, PackedScene, ...) — reopened
           path validation as expected, so needed its own maintainer conversation before starting,
           per CLAUDE.md; that conversation happened (2026-08-27) and settled scope for v1, all of

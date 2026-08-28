@@ -1636,6 +1636,117 @@ func TestSetNodeProperty_RejectsScriptPropertyRegardlessOfValueType(t *testing.T
 	}
 }
 
+// The six Typed*ArrayValue fields (Array[String]/Array[int]/Array[float]/
+// Array[Vector2]/Array[Color]/Array[Vector3]) are a distinct Variant
+// mechanism from the Packed*Array fields of the same element type — see
+// SetNodePropertyParams's doc comment — but share the exact same Go-side
+// validation shape (participate in the exactly-one-value count, same
+// nil-vs-explicitly-empty distinction), so a table covering all six avoids
+// six near-identical copies of each check, per CLAUDE.md's table-driven
+// test guidance.
+
+func typedArrayValueCases() []struct {
+	name   string
+	params SetNodePropertyParams
+} {
+	return []struct {
+		name   string
+		params SetNodePropertyParams
+	}{
+		{"TypedStringArrayValue", SetNodePropertyParams{TypedStringArrayValue: []string{"a", "b"}}},
+		{"TypedIntArrayValue", SetNodePropertyParams{TypedIntArrayValue: []int64{1, 2}}},
+		{"TypedFloatArrayValue", SetNodePropertyParams{TypedFloatArrayValue: []float64{1.5, 2.5}}},
+		{"TypedVector2ArrayValue", SetNodePropertyParams{TypedVector2ArrayValue: []Vector2{{X: 1, Y: 2}}}},
+		{"TypedColorArrayValue", SetNodePropertyParams{TypedColorArrayValue: []Color{{R: 1, G: 0, B: 0, A: 1}}}},
+		{"TypedVector3ArrayValue", SetNodePropertyParams{TypedVector3ArrayValue: []Vector3{{X: 1, Y: 2, Z: 3}}}},
+	}
+}
+
+func typedArrayEmptyValueCases() []struct {
+	name   string
+	params SetNodePropertyParams
+} {
+	return []struct {
+		name   string
+		params SetNodePropertyParams
+	}{
+		{"TypedStringArrayValue", SetNodePropertyParams{TypedStringArrayValue: []string{}}},
+		{"TypedIntArrayValue", SetNodePropertyParams{TypedIntArrayValue: []int64{}}},
+		{"TypedFloatArrayValue", SetNodePropertyParams{TypedFloatArrayValue: []float64{}}},
+		{"TypedVector2ArrayValue", SetNodePropertyParams{TypedVector2ArrayValue: []Vector2{}}},
+		{"TypedColorArrayValue", SetNodePropertyParams{TypedColorArrayValue: []Color{}}},
+		{"TypedVector3ArrayValue", SetNodePropertyParams{TypedVector3ArrayValue: []Vector3{}}},
+	}
+}
+
+func TestSetNodeProperty_TypedArrayValuesAloneAreValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	for _, tc := range typedArrayValueCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			params := tc.params
+			params.ScenePath = "main.tscn"
+			params.PropertyName = "some_property"
+			_, err := c.SetNodeProperty(context.Background(), params)
+			if err == nil {
+				t.Fatalf("SetNodeProperty with a lone %s and a garbage GodotBin, want an exec error", tc.name)
+			}
+			if strings.Contains(err.Error(), "exactly one of") {
+				t.Fatalf("SetNodeProperty rejected a lone %s as if zero/multiple values were set: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestSetNodeProperty_TypedArrayValuesEmptyIsStillValid(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	for _, tc := range typedArrayEmptyValueCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			params := tc.params
+			params.ScenePath = "main.tscn"
+			params.PropertyName = "some_property"
+			_, err := c.SetNodeProperty(context.Background(), params)
+			if err == nil {
+				t.Fatalf("SetNodeProperty with an explicitly empty %s and a garbage GodotBin, want an exec error", tc.name)
+			}
+			if strings.Contains(err.Error(), "exactly one of") {
+				t.Fatalf("SetNodeProperty rejected an explicitly empty %s as if it were unset: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestSetNodeProperty_RejectsTypedArrayValuePlusOtherValue(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tscn"), []byte("[gd_scene format=3]\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	c := newDirectReadTestClient(t, dir)
+
+	strVal := "not a typed array"
+	for _, tc := range typedArrayValueCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			params := tc.params
+			params.ScenePath = "main.tscn"
+			params.PropertyName = "some_property"
+			params.StringValue = &strVal
+			_, err := c.SetNodeProperty(context.Background(), params)
+			if err == nil {
+				t.Fatalf("SetNodeProperty with %s and string_value both set, want error", tc.name)
+			}
+		})
+	}
+}
+
 func TestReadImportSettings_MissingImportFile(t *testing.T) {
 	dir := t.TempDir()
 	// The asset exists but was never imported (or isn't an importable

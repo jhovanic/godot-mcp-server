@@ -490,26 +490,29 @@ type Color struct {
 // Vector2Value, Vector3Value, ColorValue, Vector2iValue, Vector3iValue,
 // QuaternionValue, Rect2Value, Rect2iValue, PlaneValue, AABBValue,
 // BasisValue, Transform2DValue, Transform3DValue, NodePathValue,
-// StringArrayValue, IntArrayValue, FloatArrayValue, Vector2ArrayValue,
-// ColorArrayValue, Vector3ArrayValue, NodePathArrayValue must be set —
-// which one determines the GDScript-side type the property is set to (see
-// scripts/godot_operations.gd's _op_set_node_property), since JSON itself
-// doesn't distinguish int from float the way Go and GDScript both do.
+// ResourceValue, StringArrayValue, IntArrayValue, FloatArrayValue,
+// Vector2ArrayValue, ColorArrayValue, Vector3ArrayValue, NodePathArrayValue,
+// TypedStringArrayValue, TypedIntArrayValue, TypedFloatArrayValue,
+// TypedVector2ArrayValue, TypedColorArrayValue, or TypedVector3ArrayValue
+// must be set — which one determines the GDScript-side type the property is
+// set to (see scripts/godot_operations.gd's _op_set_node_property), since
+// JSON itself doesn't distinguish int from float the way Go and GDScript
+// both do.
 //
 // This is deliberately scoped to primitives plus Vector2, Vector3, Color,
 // Vector2i, Vector3i, Quaternion, Rect2, Rect2i, Plane, AABB, Basis,
-// Transform2D, Transform3D, NodePath, PackedStringArray, PackedInt32Array,
-// PackedFloat32Array, PackedVector2Array, PackedColorArray,
-// PackedVector3Array, and Array[NodePath] for now — the complete set of
-// packed array element types with a genuine built-in Node property target,
-// plus the one typed-Array[T] element type (NodePath) that shares
-// NodePathValue's trust boundary (see FEATURES.md's array sections for what
-// isn't covered and why). Godot node properties also include other
-// compound types (resource references, other typed-array element types —
-// String/Resource holding paths or loaded references, ...); supporting
-// those is a separate, larger design (how does an AI client express a
-// sub-resource reference as tool arguments?) tracked as a future
-// FEATURES.md item, not a variant of this one.
+// Transform2D, Transform3D, NodePath, an existing-file Resource reference,
+// the PackedStringArray/PackedInt32Array/PackedFloat32Array/
+// PackedVector2Array/PackedColorArray/PackedVector3Array native packed
+// arrays, and the String/int/float/Vector2/Color/Vector3/NodePath element
+// types of the separate typed-Array[T] mechanism — a distinct Variant
+// family from Packed*Array (see StringArrayValue's and NodePathArrayValue's
+// doc comments), each needing its own field and its own hand-written
+// GDScript branch, not something derivable from the Packed*Array fields
+// above. See FEATURES.md's array sections for what isn't covered yet and
+// why — chiefly Array[Resource] (needs its own ClassDB hint_string-based
+// type-check design) and PackedByteArray/PackedInt64Array/
+// PackedFloat64Array/PackedVector4Array (parked pending actual demand).
 type SetNodePropertyParams struct {
 	// ScenePath is the .tscn path, relative to the project root. Validated
 	// against Root before use.
@@ -602,6 +605,43 @@ type SetNodePropertyParams struct {
 	// a data write, and is out of scope for every value type in this
 	// struct, not just this one.
 	ResourceValue *string `json:"resource_value,omitempty" jsonschema:"set property_name to this Resource value, referencing an existing project resource file by path (e.g. a Texture2D from a .png or .tres); exactly one of the *_value fields must be set"`
+	// TypedStringArrayValue sets a designer-typed Array[String] property —
+	// a different Variant mechanism from the PackedStringArray StringArrayValue
+	// sets above (see this package's doc comment on SetNodePropertyParams).
+	// Has the same nil-vs-explicitly-empty distinction as the packed array
+	// fields above, and for the same reason uses "omitzero" rather than
+	// "omitempty" on its json tag.
+	TypedStringArrayValue []string `json:"typed_string_array_value,omitzero" jsonschema:"set property_name to this Array[String] value (as opposed to string_array_value's PackedStringArray); exactly one of the *_value fields must be set"`
+	// TypedIntArrayValue sets a designer-typed Array[int] property — a
+	// different Variant mechanism from the PackedInt32Array IntArrayValue
+	// sets above. Has the same nil-vs-explicitly-empty distinction as the
+	// packed array fields above, and for the same reason uses "omitzero"
+	// rather than "omitempty" on its json tag.
+	TypedIntArrayValue []int64 `json:"typed_int_array_value,omitzero" jsonschema:"set property_name to this Array[int] value (as opposed to int_array_value's PackedInt32Array); exactly one of the *_value fields must be set"`
+	// TypedFloatArrayValue sets a designer-typed Array[float] property — a
+	// different Variant mechanism from the PackedFloat32Array
+	// FloatArrayValue sets above. Has the same nil-vs-explicitly-empty
+	// distinction as the packed array fields above, and for the same reason
+	// uses "omitzero" rather than "omitempty" on its json tag.
+	TypedFloatArrayValue []float64 `json:"typed_float_array_value,omitzero" jsonschema:"set property_name to this Array[float] value (as opposed to float_array_value's PackedFloat32Array); exactly one of the *_value fields must be set"`
+	// TypedVector2ArrayValue sets a designer-typed Array[Vector2] property —
+	// a different Variant mechanism from the PackedVector2Array
+	// Vector2ArrayValue sets above. Has the same nil-vs-explicitly-empty
+	// distinction as the packed array fields above, and for the same reason
+	// uses "omitzero" rather than "omitempty" on its json tag.
+	TypedVector2ArrayValue []Vector2 `json:"typed_vector2_array_value,omitzero" jsonschema:"set property_name to this Array[Vector2] value (as opposed to vector2_array_value's PackedVector2Array); exactly one of the *_value fields must be set"`
+	// TypedColorArrayValue sets a designer-typed Array[Color] property — a
+	// different Variant mechanism from the PackedColorArray ColorArrayValue
+	// sets above. Has the same nil-vs-explicitly-empty distinction as the
+	// packed array fields above, and for the same reason uses "omitzero"
+	// rather than "omitempty" on its json tag.
+	TypedColorArrayValue []Color `json:"typed_color_array_value,omitzero" jsonschema:"set property_name to this Array[Color] value (as opposed to color_array_value's PackedColorArray); exactly one of the *_value fields must be set"`
+	// TypedVector3ArrayValue sets a designer-typed Array[Vector3] property —
+	// a different Variant mechanism from the PackedVector3Array
+	// Vector3ArrayValue sets above. Has the same nil-vs-explicitly-empty
+	// distinction as the packed array fields above, and for the same reason
+	// uses "omitzero" rather than "omitempty" on its json tag.
+	TypedVector3ArrayValue []Vector3 `json:"typed_vector3_array_value,omitzero" jsonschema:"set property_name to this Array[Vector3] value (as opposed to vector3_array_value's PackedVector3Array); exactly one of the *_value fields must be set"`
 }
 
 // SetNodePropertyResult confirms a completed property write.
@@ -692,13 +732,19 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		params.Vector3ArrayValue != nil,
 		params.NodePathArrayValue != nil,
 		params.ResourceValue != nil,
+		params.TypedStringArrayValue != nil,
+		params.TypedIntArrayValue != nil,
+		params.TypedFloatArrayValue != nil,
+		params.TypedVector2ArrayValue != nil,
+		params.TypedColorArrayValue != nil,
+		params.TypedVector3ArrayValue != nil,
 	} {
 		if set {
 			valuesSet++
 		}
 	}
 	if valuesSet != 1 {
-		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value, resource_value must be set, got %d", valuesSet)
+		return nil, fmt.Errorf("headless: set_node_property: exactly one of string_value, int_value, float_value, bool_value, vector2_value, vector3_value, color_value, vector2i_value, vector3i_value, quaternion_value, rect2_value, rect2i_value, plane_value, aabb_value, basis_value, transform2d_value, transform3d_value, node_path_value, string_array_value, int_array_value, float_array_value, vector2_array_value, color_array_value, vector3_array_value, node_path_array_value, resource_value, typed_string_array_value, typed_int_array_value, typed_float_array_value, typed_vector2_array_value, typed_color_array_value, typed_vector3_array_value must be set, got %d", valuesSet)
 	}
 
 	relScenePath, err := filepath.Rel(c.Root.String(), absScenePath)
@@ -761,36 +807,50 @@ func (c *Client) SetNodeProperty(ctx context.Context, params SetNodePropertyPara
 		ColorArrayValue    []Color   `json:"color_array_value,omitzero"`
 		Vector3ArrayValue  []Vector3 `json:"vector3_array_value,omitzero"`
 		NodePathArrayValue []string  `json:"node_path_array_value,omitzero"`
+		// Same omitzero rationale as the Packed*Array fields above, applied
+		// to the separate typed-Array[T] mechanism.
+		TypedStringArrayValue  []string  `json:"typed_string_array_value,omitzero"`
+		TypedIntArrayValue     []int64   `json:"typed_int_array_value,omitzero"`
+		TypedFloatArrayValue   []float64 `json:"typed_float_array_value,omitzero"`
+		TypedVector2ArrayValue []Vector2 `json:"typed_vector2_array_value,omitzero"`
+		TypedColorArrayValue   []Color   `json:"typed_color_array_value,omitzero"`
+		TypedVector3ArrayValue []Vector3 `json:"typed_vector3_array_value,omitzero"`
 	}{
-		Path:               resPath,
-		NodePath:           params.NodePath,
-		PropertyName:       params.PropertyName,
-		StringValue:        params.StringValue,
-		IntValue:           params.IntValue,
-		FloatValue:         params.FloatValue,
-		BoolValue:          params.BoolValue,
-		Vector2Value:       params.Vector2Value,
-		Vector3Value:       params.Vector3Value,
-		ColorValue:         params.ColorValue,
-		Vector2iValue:      params.Vector2iValue,
-		Vector3iValue:      params.Vector3iValue,
-		QuaternionValue:    params.QuaternionValue,
-		Rect2Value:         params.Rect2Value,
-		Rect2iValue:        params.Rect2iValue,
-		PlaneValue:         params.PlaneValue,
-		AABBValue:          params.AABBValue,
-		BasisValue:         params.BasisValue,
-		Transform2DValue:   params.Transform2DValue,
-		Transform3DValue:   params.Transform3DValue,
-		NodePathValue:      params.NodePathValue,
-		ResourceValue:      resourceResPath,
-		StringArrayValue:   params.StringArrayValue,
-		IntArrayValue:      params.IntArrayValue,
-		FloatArrayValue:    params.FloatArrayValue,
-		Vector2ArrayValue:  params.Vector2ArrayValue,
-		ColorArrayValue:    params.ColorArrayValue,
-		Vector3ArrayValue:  params.Vector3ArrayValue,
-		NodePathArrayValue: params.NodePathArrayValue,
+		Path:                   resPath,
+		NodePath:               params.NodePath,
+		PropertyName:           params.PropertyName,
+		StringValue:            params.StringValue,
+		IntValue:               params.IntValue,
+		FloatValue:             params.FloatValue,
+		BoolValue:              params.BoolValue,
+		Vector2Value:           params.Vector2Value,
+		Vector3Value:           params.Vector3Value,
+		ColorValue:             params.ColorValue,
+		Vector2iValue:          params.Vector2iValue,
+		Vector3iValue:          params.Vector3iValue,
+		QuaternionValue:        params.QuaternionValue,
+		Rect2Value:             params.Rect2Value,
+		Rect2iValue:            params.Rect2iValue,
+		PlaneValue:             params.PlaneValue,
+		AABBValue:              params.AABBValue,
+		BasisValue:             params.BasisValue,
+		Transform2DValue:       params.Transform2DValue,
+		Transform3DValue:       params.Transform3DValue,
+		NodePathValue:          params.NodePathValue,
+		ResourceValue:          resourceResPath,
+		StringArrayValue:       params.StringArrayValue,
+		IntArrayValue:          params.IntArrayValue,
+		FloatArrayValue:        params.FloatArrayValue,
+		Vector2ArrayValue:      params.Vector2ArrayValue,
+		ColorArrayValue:        params.ColorArrayValue,
+		Vector3ArrayValue:      params.Vector3ArrayValue,
+		NodePathArrayValue:     params.NodePathArrayValue,
+		TypedStringArrayValue:  params.TypedStringArrayValue,
+		TypedIntArrayValue:     params.TypedIntArrayValue,
+		TypedFloatArrayValue:   params.TypedFloatArrayValue,
+		TypedVector2ArrayValue: params.TypedVector2ArrayValue,
+		TypedColorArrayValue:   params.TypedColorArrayValue,
+		TypedVector3ArrayValue: params.TypedVector3ArrayValue,
 	}, &result); err != nil {
 		return nil, fmt.Errorf("headless: set_node_property: %w", err)
 	}

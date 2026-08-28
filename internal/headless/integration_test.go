@@ -282,21 +282,36 @@ func writeMinimalPNG(t *testing.T, path string) {
 // doc comment) — between them, every value type SetNodeProperty supports
 // has a genuine target property to exercise.
 //
-// Vector3i and Plane are the two types with no built-in Node target at all:
-// no built-in Node class exposes either property type (verified against a
-// real build via ClassDB introspection — the only property of either type
-// anywhere in the engine is on a Resource, out of this tool's reach either
-// way, since it only ever targets Node properties). Testing them against
-// custom_props_holder.gd's exported properties (grid_position, a Vector3i;
-// boundary_plane, a Plane) instead is also a more realistic stand-in for how
-// this tool actually gets used: against a project's own custom node
-// scripts, not just built-in engine properties.
+// Vector3i and Plane are two of the types with no built-in Node target at
+// all: no built-in Node class exposes either property type (verified
+// against a real build via ClassDB introspection — the only property of
+// either type anywhere in the engine is on a Resource, out of this tool's
+// reach either way, since it only ever targets Node properties). Testing
+// them against custom_props_holder.gd's exported properties (grid_position,
+// a Vector3i; boundary_plane, a Plane) instead is also a more realistic
+// stand-in for how this tool actually gets used: against a project's own
+// custom node scripts, not just built-in engine properties.
+//
+// The same is true, and was reverified the same way, for every
+// Typed*ArrayValue element type (Array[String]/Array[int]/Array[float]/
+// Array[Vector2]/Array[Color]/Array[Vector3]): no built-in Node class
+// exposes a typed-Array[T] property of any of these element types (only
+// Array[NodePath], on Control.accessibility_flow_to_nodes, has a real
+// built-in target). custom_props_holder.gd's typed_strings/typed_ints/
+// typed_floats/typed_vector2s/typed_colors/typed_vector3s properties are
+// the real-Godot test target for all six.
 func writeSetNodePropertyFixtureScene(t *testing.T, godotBin, projectDir string) {
 	t.Helper()
 	const script = `extends Node
 
 @export var grid_position: Vector3i = Vector3i.ZERO
 @export var boundary_plane: Plane = Plane(0, 1, 0, 0)
+@export var typed_strings: Array[String] = []
+@export var typed_ints: Array[int] = []
+@export var typed_floats: Array[float] = []
+@export var typed_vector2s: Array[Vector2] = []
+@export var typed_colors: Array[Color] = []
+@export var typed_vector3s: Array[Vector3] = []
 `
 	if err := os.WriteFile(filepath.Join(projectDir, "custom_props_holder.gd"), []byte(script), 0o644); err != nil {
 		t.Fatalf("writing fixture script: %v", err)
@@ -1771,6 +1786,87 @@ func TestSetNodeProperty_RealGodot_ScriptPropertyBlocked(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Errorf("scene was modified despite the \"script\" block:\nbefore: %s\nafter: %s", before, after)
+	}
+}
+
+// TestSetNodeProperty_RealGodot_TypedArrays exercises all six
+// Typed*ArrayValue fields against custom_props_holder.gd's matching
+// exported properties (see writeSetNodePropertyFixtureScene's doc comment
+// for why no built-in Node target exists for any of them), table-driven
+// since the shape of the check — set the field, read the saved scene back,
+// look for Godot's own typed-array serialization of it — is identical
+// across all six element types.
+func TestSetNodeProperty_RealGodot_TypedArrays(t *testing.T) {
+	tests := []struct {
+		name     string
+		property string
+		set      func(*SetNodePropertyParams)
+		want     string
+	}{
+		{
+			name:     "TypedStringArrayValue",
+			property: "typed_strings",
+			set:      func(p *SetNodePropertyParams) { p.TypedStringArrayValue = []string{"alpha", "beta"} },
+			want:     `typed_strings = Array[String](["alpha", "beta"])`,
+		},
+		{
+			name:     "TypedIntArrayValue",
+			property: "typed_ints",
+			set:      func(p *SetNodePropertyParams) { p.TypedIntArrayValue = []int64{1, 2, 3} },
+			want:     `typed_ints = Array[int]([1, 2, 3])`,
+		},
+		{
+			name:     "TypedFloatArrayValue",
+			property: "typed_floats",
+			set:      func(p *SetNodePropertyParams) { p.TypedFloatArrayValue = []float64{1.5, 2.5} },
+			want:     `typed_floats = Array[float]([1.5, 2.5])`,
+		},
+		{
+			name:     "TypedVector2ArrayValue",
+			property: "typed_vector2s",
+			set:      func(p *SetNodePropertyParams) { p.TypedVector2ArrayValue = []Vector2{{X: 1, Y: 2}} },
+			want:     `typed_vector2s = Array[Vector2]([Vector2(1, 2)])`,
+		},
+		{
+			name:     "TypedColorArrayValue",
+			property: "typed_colors",
+			set:      func(p *SetNodePropertyParams) { p.TypedColorArrayValue = []Color{{R: 1, G: 0, B: 0, A: 1}} },
+			want:     `typed_colors = Array[Color]([Color(1, 0, 0, 1)])`,
+		},
+		{
+			name:     "TypedVector3ArrayValue",
+			property: "typed_vector3s",
+			set:      func(p *SetNodePropertyParams) { p.TypedVector3ArrayValue = []Vector3{{X: 1, Y: 2, Z: 3}} },
+			want:     `typed_vector3s = Array[Vector3]([Vector3(1, 2, 3)])`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := setNodePropertyFixtureClient(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			params := SetNodePropertyParams{
+				ScenePath:    "main.tscn",
+				NodePath:     "IntGrid",
+				PropertyName: tt.property,
+			}
+			tt.set(&params)
+
+			if _, err := c.SetNodeProperty(ctx, params); err != nil {
+				t.Fatalf("SetNodeProperty against a real Godot binary: %v", err)
+			}
+
+			data, err := os.ReadFile(filepath.Join(c.Root.String(), "main.tscn"))
+			if err != nil {
+				t.Fatalf("reading saved scene: %v", err)
+			}
+			if !strings.Contains(string(data), tt.want) {
+				t.Errorf("saved scene missing expected %s property: %s", tt.property, data)
+			}
+		})
 	}
 }
 
