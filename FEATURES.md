@@ -10,8 +10,15 @@ changelog.
 - [x] Fixed, explicit tool allowlist — no generic execution tool, ever
 - [x] Path validation on every file operation: resolves inside configured project root, rejects
       `../` traversal outright
-- [x] TCP runtime tier only ever dials `127.0.0.1`, never exposed beyond loopback by default (the
-      Go side is a client — the autoload script owns the bound socket, see README's architecture)
+- [x] TCP runtime tier only ever dials `127.0.0.1`, never exposed beyond loopback by default — true
+      of both halves: `discover_runtime_instances`/`read_runtime_scene_tree`/
+      `read_runtime_node_property` are a client dialing out to the autoload's own bound socket
+      (see README's architecture), and `launch_project`'s process capture is plain OS pipes, no
+      socket at all. Note the same-machine trust boundary now cuts both ways — this server's own
+      discovery can reach *any* project on the machine running the autoload, not just the
+      configured one (see SECURITY.md's threat table) — an accepted consequence of the existing
+      "a process on the local machine is trusted" model, not a new escalation, but worth stating
+      plainly rather than leaving implicit.
 - [x] Per-invocation audit logging (operation, params, result) independent of the MCP client's own
       logs (stderr always; also `logs/<session>.txt` next to the binary by default, so a human
       has a durable file to review — see `SECURITY.md`)
@@ -376,10 +383,78 @@ changelog.
       result would uselessly say `"Resource"`.
 
 ### TCP runtime tier
-- [ ] Autoload listener script (localhost-only) for live editor/game state
-- [ ] Read current scene state from a running game
-- [ ] Read console/debugger output
-- [ ] Trigger inputs for interactive testing (scoped, logged)
+
+Two feature requests (`stream_runtime_output`, `read_debugger_state`) refined this section's
+original four-bullet sketch into three technically distinct capabilities, each with a different
+feasibility profile — captured here so the split stays deliberate:
+
+- [x] Autoload listener script (localhost-only) for live game state — the foundation for the
+      scene/property-read bullet below. `scripts/mcp_runtime_autoload.gd`, a template the operator
+      copies into their own project and registers in `project.godot` (this server never writes it
+      or edits `project.godot` — see README's "Enabling the TCP runtime tier"). Binds the first
+      free port in a fixed, documented range (`internal/runtime.DefaultPortRange`, `9080`-`9089`
+      by default) rather than one single port: something else might already be bound to the
+      "obvious" choice, and Godot's own "run multiple instances" feature (local multiplayer
+      testing) means more than one live listener can legitimately exist at once. Works for a
+      process started *any* way — this server's own `launch_project`, or the editor's own Play
+      button — since it's a plain TCP socket, not tied to who spawned the process.
+    - Empirically discovered (real Godot 4.7.2 binary) that `StreamPeerTCP.put_utf8_string()` is
+      **not** a plain write: it silently prepends a 4-byte length header (Godot's own `StreamPeer`
+      framing convention), which corrupts a plain newline-delimited line protocol. Fixed by using
+      `put_data(text.to_utf8_buffer())` instead — the read side (`get_utf8_string(available)`) was
+      already a plain raw-byte read and needed no change. Exactly the kind of assumption this
+      project's own practice of verifying against a real binary before trusting a design exists to
+      catch.
+- [x] Read current scene state from a running game — `discover_runtime_instances` (scans the port
+      range, returns every live listener found — not just the first, with each one's own
+      `project_name` for disambiguation; an empty result is a normal, successful outcome, not an
+      error, and includes a hint pointing at the autoload template) plus `read_runtime_scene_tree`/
+      `read_runtime_node_property` against a specific discovered port. Both fully stateless — no
+      registry, no `run_id` — each call is an independent, fresh TCP dial;
+      `read_runtime_scene_tree`'s nodes carry a `path` field (absent from `read_scene_tree`'s own
+      `SceneNode`, a gap flagged once before) so a result chains directly into
+      `read_runtime_node_property` without reconstructing paths by hand. Live property values are
+      returned as a string representation plus a type name, not a fully round-trippable typed
+      value — mirrors `SetNodePropertyResult.PreviousValue`'s own `str()` precedent, since the
+      point is letting an AI understand a value, not feed it back into another structured call.
+- [x] Read console/debugger output — split into two, since they need entirely different
+      mechanisms:
+    - [x] Raw stdout/stderr text from a **self-launched** process — `launch_project`/
+          `read_runtime_output`/`stop_runtime`. Plain OS pipe capture (`cmd.Stdout`/`cmd.Stderr` as
+          a custom `io.Writer`, same idiom `internal/headless.Client` already uses for short-lived
+          invocations, just kept running instead of waited-on) — no autoload, no socket at all.
+          Only ever works for a process this server itself launched: OS pipes only exist between a
+          process and its direct parent, so an editor-launched session's output is categorically
+          unreachable no matter what. This is also this server's first stateful, cross-call server
+          state (`internal/runtime.Manager`, a registry of launched processes keyed by `run_id`) —
+          every other tool in this project is a single self-contained call. Output is a capped,
+          oldest-evicted ring buffer per process (default 2000 lines, `-runtime-output-buffer-lines`),
+          paginated by a monotonic cursor (`read_runtime_output`'s `since_cursor`/`cursor`, with a
+          `truncated` flag when the caller's cursor referred to already-evicted lines rather than
+          an empty gap). `stop_runtime` is a hard `Process.Kill()` on every platform, not a
+          graceful SIGTERM-then-wait sequence — `SIGTERM` doesn't port cleanly to Windows, a real
+          target in this project's release matrix, and a debugging tool asking the game to stop
+          has no need to preserve in-game state. `launch_project` caps concurrently running
+          launches (default 4, `-runtime-max-instances`) to guard against runaway resource use.
+          Godot already writes script errors/exceptions to stderr as formatted text with no
+          debugger attached (this project's own `checkScriptParses` already relies on that), so
+          this alone covers a real fraction of "tell me what broke" — the workflow that actually
+          motivated the request was never "watch the human's own live session," but "the human
+          describes a symptom in chat, the AI independently relaunches the project to verify it."
+    - [ ] Structured errors/exceptions with parsed stack traces from a session the user is watching
+          live in the editor — **not achievable via the custom autoload at all**: a GDScript script
+          has no API to intercept the engine's own print/error stream as it happens, only Godot's
+          own internal editor↔game debug connection (or possibly the Debug Adapter Protocol it
+          also exposes) can see that. Feasibility genuinely unverified — unlike everything else in
+          this tier, this would mean depending on an internal/undocumented protocol or an
+          unverified-scope DAP implementation, a materially bigger and less stable undertaking than
+          anything else here. Deferred pending real investigation against a Godot binary, not
+          silently dropped — this is the `read_debugger_state` request's `read_recent_errors` tool.
+- [ ] Trigger inputs for interactive testing (scoped, logged) — untouched by either feature request
+      that motivated the rest of this section (a **write** against a live process — simulating an
+      input event via the autoload's protocol — a different risk shape than every read above). Left
+      for its own future scoping conversation, not bundled in here just because it's also "runtime
+      tier."
 
 ### Distribution
 - [x] Cross-compiled release binaries (Linux/macOS/Windows, amd64/arm64) via `goreleaser` in

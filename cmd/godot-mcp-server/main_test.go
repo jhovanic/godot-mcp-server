@@ -83,15 +83,54 @@ func TestParseFlags_InvalidMode(t *testing.T) {
 	}
 }
 
-// There is deliberately no runtime-tier flag yet at all: internal/runtime
-// is a client with nothing wired into the tool allowlist to configure. This
-// test documents that, so a reviewer notices if a host/address-shaped flag
-// gets added ahead of (or without) the operation that needs it.
-func TestParseFlags_NoRuntimeTierFlagsYet(t *testing.T) {
-	for _, unknown := range []string{"-runtime-host", "-runtime-port", "-enable-runtime-tier"} {
-		_, err := parseFlags([]string{"-project", "/tmp/x", unknown, "1"})
-		if err == nil {
-			t.Errorf("parseFlags accepted unknown flag %q, want error (no runtime-tier flags should exist yet)", unknown)
-		}
+// TestParseFlags_RuntimeTierDefaults confirms the TCP runtime tier's flags
+// (added alongside launch_project/discover_runtime_instances/etc., the
+// first runtime-tier operations in the tool allowlist) default sensibly
+// when omitted. This supersedes the old TestParseFlags_NoRuntimeTierFlagsYet,
+// whose own comment anticipated exactly this moment.
+func TestParseFlags_RuntimeTierDefaults(t *testing.T) {
+	cfg, err := parseFlags([]string{"-project", "/tmp/my-godot-project"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if cfg.runtimePortRange != "9080-9089" {
+		t.Errorf("runtimePortRange = %q, want %q", cfg.runtimePortRange, "9080-9089")
+	}
+	if cfg.runtimeMaxInstances != 4 {
+		t.Errorf("runtimeMaxInstances = %d, want 4", cfg.runtimeMaxInstances)
+	}
+	if cfg.runtimeOutputBufferLines != 2000 {
+		t.Errorf("runtimeOutputBufferLines = %d, want 2000", cfg.runtimeOutputBufferLines)
+	}
+}
+
+func TestParseFlags_RuntimePortRangeOverride(t *testing.T) {
+	cfg, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-runtime-port-range", "7000-7005"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if cfg.runtimePortRange != "7000-7005" {
+		t.Errorf("runtimePortRange = %q, want %q", cfg.runtimePortRange, "7000-7005")
+	}
+}
+
+func TestParseFlags_RejectsMalformedRuntimePortRange(t *testing.T) {
+	for _, bad := range []string{"not-a-range", "9080", "9089-9080", "0-10", "abc-def"} {
+		t.Run(bad, func(t *testing.T) {
+			_, err := parseFlags([]string{"-project", "/tmp/my-godot-project", "-runtime-port-range", bad})
+			if err == nil {
+				t.Fatalf("parseFlags with -runtime-port-range %q, want error", bad)
+			}
+		})
+	}
+}
+
+func TestParsePortRange(t *testing.T) {
+	r, err := parsePortRange("9080-9089")
+	if err != nil {
+		t.Fatalf("parsePortRange: %v", err)
+	}
+	if r.Start != 9080 || r.End != 9089 {
+		t.Fatalf("parsePortRange result = %+v, want {9080 9089}", r)
 	}
 }

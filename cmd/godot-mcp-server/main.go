@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 
 	"github.com/jhovanic/godot-mcp-server/internal/audit"
 	"github.com/jhovanic/godot-mcp-server/internal/headless"
+	"github.com/jhovanic/godot-mcp-server/internal/runtime"
 	"github.com/jhovanic/godot-mcp-server/internal/tools"
 	"github.com/jhovanic/godot-mcp-server/internal/validate"
 )
@@ -32,17 +35,16 @@ import (
 // defaults to this placeholder for `go build`/`go run` during development.
 var serverVersion = "0.0.0-dev"
 
-// The TCP runtime tier (internal/runtime) isn't wired up here yet: no
-// runtime-tier operation has been added to the tool allowlist, so there's
-// nothing for a -runtime-* flag to configure. Add the flag(s) alongside the
-// first tool that actually uses internal/runtime.Client, so the CLI surface
-// only ever describes what's real.
 type config struct {
 	projectRoot      string
 	godotBin         string
 	operationsScript string
 	auditLogPath     string
 	mode             string
+
+	runtimePortRange         string
+	runtimeMaxInstances      int
+	runtimeOutputBufferLines int
 }
 
 func parseFlags(args []string) (config, error) {
@@ -50,10 +52,13 @@ func parseFlags(args []string) (config, error) {
 
 	var cfg config
 	fs.StringVar(&cfg.projectRoot, "project", "", "path to the Godot project root (required); every file operation is scoped to this directory")
-	fs.StringVar(&cfg.godotBin, "godot-bin", "godot", "path to (or name on PATH of) the Godot executable used for the headless CLI tier")
+	fs.StringVar(&cfg.godotBin, "godot-bin", "godot", "path to (or name on PATH of) the Godot executable used for the headless CLI tier and launch_project")
 	fs.StringVar(&cfg.operationsScript, "operations-script", "", "path to the fixed headless operations script (default: scripts/godot_operations.gd next to this binary)")
 	fs.StringVar(&cfg.auditLogPath, "audit-log", "", "optional additional path to write the audit log to (entries are always written to stderr and to logs/<session>.txt next to this binary)")
-	fs.StringVar(&cfg.mode, "mode", string(tools.ModeReadOnly), fmt.Sprintf("which tools to expose: %q, %q, or %q (a strict superset of %q that additionally unlocks set_function_body and write_text_resource's script_path option — see SECURITY.md before using it); write tools are never advertised to the MCP client outside %q and %q", tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeAdvanced, tools.ModeReadWrite, tools.ModeReadWrite, tools.ModeAdvanced))
+	fs.StringVar(&cfg.mode, "mode", string(tools.ModeReadOnly), fmt.Sprintf("which tools to expose: %q, %q, or %q (a strict superset of %q that additionally unlocks set_function_body, write_text_resource's script_path option, and the TCP runtime tier — see SECURITY.md before using it); write tools are never advertised to the MCP client outside %q and %q", tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeAdvanced, tools.ModeReadWrite, tools.ModeReadWrite, tools.ModeAdvanced))
+	fs.StringVar(&cfg.runtimePortRange, "runtime-port-range", fmt.Sprintf("%d-%d", runtime.DefaultPortRange.Start, runtime.DefaultPortRange.End), "the TCP runtime tier's port range (\"START-END\"), for discover_runtime_instances; must match the range scripts/mcp_runtime_autoload.gd is configured to try in the target project, or discovery won't find it")
+	fs.IntVar(&cfg.runtimeMaxInstances, "runtime-max-instances", 4, "max concurrently running processes launch_project will allow before refusing a new launch")
+	fs.IntVar(&cfg.runtimeOutputBufferLines, "runtime-output-buffer-lines", 2000, "max buffered stdout/stderr lines per launch_project'd process, oldest evicted first")
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -64,7 +69,30 @@ func parseFlags(args []string) (config, error) {
 	if cfg.mode != string(tools.ModeReadOnly) && cfg.mode != string(tools.ModeReadWrite) && cfg.mode != string(tools.ModeAdvanced) {
 		return config{}, fmt.Errorf("-mode %q: must be %q, %q, or %q", cfg.mode, tools.ModeReadOnly, tools.ModeReadWrite, tools.ModeAdvanced)
 	}
+	if _, err := parsePortRange(cfg.runtimePortRange); err != nil {
+		return config{}, fmt.Errorf("-runtime-port-range: %w", err)
+	}
 	return cfg, nil
+}
+
+// parsePortRange parses a "START-END" string into a runtime.PortRange.
+func parsePortRange(s string) (runtime.PortRange, error) {
+	start, end, ok := strings.Cut(s, "-")
+	if !ok {
+		return runtime.PortRange{}, fmt.Errorf("%q: expected \"START-END\"", s)
+	}
+	startN, err := strconv.Atoi(strings.TrimSpace(start))
+	if err != nil {
+		return runtime.PortRange{}, fmt.Errorf("%q: invalid start port: %w", s, err)
+	}
+	endN, err := strconv.Atoi(strings.TrimSpace(end))
+	if err != nil {
+		return runtime.PortRange{}, fmt.Errorf("%q: invalid end port: %w", s, err)
+	}
+	if startN <= 0 || endN <= 0 || endN < startN {
+		return runtime.PortRange{}, fmt.Errorf("%q: start must be positive and <= end", s)
+	}
+	return runtime.PortRange{Start: startN, End: endN}, nil
 }
 
 func defaultOperationsScriptPath() (string, error) {
@@ -163,6 +191,17 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		Root:             root,
 	}
 
+	// parseFlags already validated this string once; the error is
+	// unreachable here.
+	portRange, _ := parsePortRange(cfg.runtimePortRange)
+	runtimeManager := runtime.NewManager(cfg.godotBin, root, logger, cfg.runtimeMaxInstances, cfg.runtimeOutputBufferLines)
+	// Kill every process this server ever launched before the server
+	// itself exits — run() returning (however it returns: ctx
+	// cancellation from a signal, or an error) must never leave orphaned
+	// game processes running.
+	defer runtimeManager.Shutdown()
+	runtimeDiscoverer := &runtime.Discoverer{PortRange: portRange, Logger: logger}
+
 	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server", Version: serverVersion}, nil)
 	tools.RegisterAll(server, tools.Deps{
 		SceneTree:         headlessClient,
@@ -180,12 +219,18 @@ func run(ctx context.Context, cfg config, stderr io.Writer) error {
 		ScriptIdentity:    headlessClient,
 		FunctionBody:      headlessClient,
 		WriteTextResource: headlessClient,
+		RuntimeLauncher:   runtimeManager,
+		RuntimeOutput:     runtimeManager,
+		RuntimeStopper:    runtimeManager,
+		RuntimeDiscoverer: runtimeDiscoverer,
+		RuntimeSceneTree:  runtimeDiscoverer,
+		RuntimeNodeProp:   runtimeDiscoverer,
 		Mode:              tools.Mode(cfg.mode),
 		Logger:            logger,
 	})
 
 	if cfg.mode == string(tools.ModeAdvanced) {
-		_, _ = fmt.Fprintln(stderr, "godot-mcp-server: WARNING: -mode advanced is enabled — the connected AI client can write and replace executable GDScript logic in this project, and write_text_resource can instantiate and run any project script via script_path. See SECURITY.md before using this mode.")
+		_, _ = fmt.Fprintln(stderr, "godot-mcp-server: WARNING: -mode advanced is enabled — the connected AI client can write and replace executable GDScript logic in this project, write_text_resource can instantiate and run any project script via script_path, and the TCP runtime tier can launch/control Godot processes and reach any project's live-state autoload on this machine. See SECURITY.md before using this mode.")
 	}
 	_, _ = fmt.Fprintf(stderr, "godot-mcp-server: project root %s, mode %s, serving over stdio\n", root.String(), cfg.mode)
 	return server.Run(ctx, &mcp.StdioTransport{})

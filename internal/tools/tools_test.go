@@ -12,6 +12,7 @@ import (
 
 	"github.com/jhovanic/godot-mcp-server/internal/audit"
 	"github.com/jhovanic/godot-mcp-server/internal/headless"
+	"github.com/jhovanic/godot-mcp-server/internal/runtime"
 	"github.com/jhovanic/godot-mcp-server/internal/tools"
 )
 
@@ -192,6 +193,79 @@ type fakeFunctionBodySetter struct {
 }
 
 func (f *fakeFunctionBodySetter) SetFunctionBody(_ context.Context, params headless.SetFunctionBodyParams) (*headless.SetFunctionBodyResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeRuntimeLauncher is a test double for tools.RuntimeLauncher.
+type fakeRuntimeLauncher struct {
+	gotParams runtime.LaunchProjectParams
+	result    *runtime.LaunchProjectResult
+	err       error
+}
+
+func (f *fakeRuntimeLauncher) LaunchProject(_ context.Context, params runtime.LaunchProjectParams) (*runtime.LaunchProjectResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeRuntimeOutputReader is a test double for tools.RuntimeOutputReader.
+type fakeRuntimeOutputReader struct {
+	gotParams runtime.ReadRuntimeOutputParams
+	result    *runtime.ReadRuntimeOutputResult
+	err       error
+}
+
+func (f *fakeRuntimeOutputReader) ReadRuntimeOutput(_ context.Context, params runtime.ReadRuntimeOutputParams) (*runtime.ReadRuntimeOutputResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeRuntimeStopper is a test double for tools.RuntimeStopper.
+type fakeRuntimeStopper struct {
+	gotParams runtime.StopRuntimeParams
+	result    *runtime.StopRuntimeResult
+	err       error
+}
+
+func (f *fakeRuntimeStopper) StopRuntime(_ context.Context, params runtime.StopRuntimeParams) (*runtime.StopRuntimeResult, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeRuntimeInstanceDiscoverer is a test double for
+// tools.RuntimeInstanceDiscoverer.
+type fakeRuntimeInstanceDiscoverer struct {
+	result []runtime.Instance
+	err    error
+}
+
+func (f *fakeRuntimeInstanceDiscoverer) DiscoverRuntimeInstances(_ context.Context, _ runtime.DiscoverRuntimeInstancesParams) ([]runtime.Instance, error) {
+	return f.result, f.err
+}
+
+// fakeRuntimeSceneTreeReader is a test double for
+// tools.RuntimeSceneTreeReader.
+type fakeRuntimeSceneTreeReader struct {
+	gotParams runtime.ReadRuntimeSceneTreeParams
+	result    *runtime.RuntimeSceneNode
+	err       error
+}
+
+func (f *fakeRuntimeSceneTreeReader) ReadRuntimeSceneTree(_ context.Context, params runtime.ReadRuntimeSceneTreeParams) (*runtime.RuntimeSceneNode, error) {
+	f.gotParams = params
+	return f.result, f.err
+}
+
+// fakeRuntimeNodePropertyReader is a test double for
+// tools.RuntimeNodePropertyReader.
+type fakeRuntimeNodePropertyReader struct {
+	gotParams runtime.ReadRuntimeNodePropertyToolParams
+	result    *runtime.RuntimeNodePropertyResult
+	err       error
+}
+
+func (f *fakeRuntimeNodePropertyReader) ReadRuntimeNodeProperty(_ context.Context, params runtime.ReadRuntimeNodePropertyToolParams) (*runtime.RuntimeNodePropertyResult, error) {
 	f.gotParams = params
 	return f.result, f.err
 }
@@ -788,6 +862,12 @@ func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 		ScriptIdentity:    &fakeScriptIdentitySetter{},
 		FunctionBody:      &fakeFunctionBodySetter{},
 		WriteTextResource: &fakeTextResourceWriter{},
+		RuntimeLauncher:   &fakeRuntimeLauncher{},
+		RuntimeOutput:     &fakeRuntimeOutputReader{},
+		RuntimeStopper:    &fakeRuntimeStopper{},
+		RuntimeDiscoverer: &fakeRuntimeInstanceDiscoverer{},
+		RuntimeSceneTree:  &fakeRuntimeSceneTreeReader{},
+		RuntimeNodeProp:   &fakeRuntimeNodePropertyReader{},
 		Mode:              mode,
 		Logger:            logger,
 	}
@@ -807,11 +887,27 @@ var readWriteToolNames = map[string]bool{
 	"write_text_resource": true,
 }
 
+// advancedOnlyToolNames is the additional tool set ModeAdvanced adds on
+// top of everything ModeReadWrite already has — set_function_body (authors
+// executable GDScript logic) and the whole TCP runtime tier (launching/
+// controlling a process, and reaching a live game's own socket, are both a
+// materially different risk than any file-only tool, even where the
+// runtime-tier operation itself is read-only).
+var advancedOnlyToolNames = map[string]bool{
+	"set_function_body":          true,
+	"launch_project":             true,
+	"read_runtime_output":        true,
+	"stop_runtime":               true,
+	"discover_runtime_instances": true,
+	"read_runtime_scene_tree":    true,
+	"read_runtime_node_property": true,
+}
+
 // TestRegisterAll_ModeGatesWriteTools asserts the write tool set advertised
 // to the MCP client tracks deps.Mode exactly: only the read tools in
 // ModeReadOnly (including the zero value of Mode, so an unset Mode fails
 // safe rather than fails open), plus set_node_property and
-// set_script_export in ModeReadWrite, plus set_function_body in
+// set_script_export in ModeReadWrite, plus advancedOnlyToolNames in
 // ModeAdvanced (a strict superset of ModeReadWrite's own tools). Update the
 // write-tool lists deliberately when the next write tool is intentionally
 // added.
@@ -824,7 +920,7 @@ func TestRegisterAll_ModeGatesWriteTools(t *testing.T) {
 		{name: "zero value", mode: "", want: readToolNames},
 		{name: "read-only", mode: tools.ModeReadOnly, want: readToolNames},
 		{name: "read-write", mode: tools.ModeReadWrite, want: union(readToolNames, readWriteToolNames)},
-		{name: "advanced", mode: tools.ModeAdvanced, want: union(readToolNames, union(readWriteToolNames, map[string]bool{"set_function_body": true}))},
+		{name: "advanced", mode: tools.ModeAdvanced, want: union(readToolNames, union(readWriteToolNames, advancedOnlyToolNames))},
 	}
 
 	for _, tc := range cases {
@@ -3129,6 +3225,467 @@ func TestSetFunctionBody_NotRegisteredUnderReadWrite(t *testing.T) {
 	for _, tl := range list.Tools {
 		if tl.Name == "set_function_body" {
 			t.Fatal("set_function_body was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestLaunchProject_Success(t *testing.T) {
+	launcher := &fakeRuntimeLauncher{result: &runtime.LaunchProjectResult{RunID: "run-1"}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeLauncher = launcher
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "launch_project",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "launch_project" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "launch_project")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestLaunchProject_Error(t *testing.T) {
+	wantErr := errors.New("boom: too many instances running")
+	launcher := &fakeRuntimeLauncher{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeLauncher = launcher
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "launch_project", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+func TestLaunchProject_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "launch_project" {
+			t.Fatal("launch_project was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestReadRuntimeOutput_Success(t *testing.T) {
+	reader := &fakeRuntimeOutputReader{result: &runtime.ReadRuntimeOutputResult{Cursor: 3}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeOutput = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "read_runtime_output",
+		Arguments: map[string]any{"run_id": "run-1", "since_cursor": 2},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.RunID != "run-1" || reader.gotParams.SinceCursor != 2 {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "read_runtime_output" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "read_runtime_output")
+	}
+}
+
+func TestReadRuntimeOutput_Error(t *testing.T) {
+	reader := &fakeRuntimeOutputReader{err: errors.New("boom: no such run_id")}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeOutput = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_runtime_output",
+		Arguments: map[string]any{"run_id": "does-not-exist"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+}
+
+func TestReadRuntimeOutput_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "read_runtime_output" {
+			t.Fatal("read_runtime_output was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestStopRuntime_Success(t *testing.T) {
+	stopper := &fakeRuntimeStopper{result: &runtime.StopRuntimeResult{RunID: "run-1"}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeStopper = stopper
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "stop_runtime",
+		Arguments: map[string]any{"run_id": "run-1"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if stopper.gotParams.RunID != "run-1" {
+		t.Fatalf("handler did not pass through params, got %+v", stopper.gotParams)
+	}
+}
+
+func TestStopRuntime_Error(t *testing.T) {
+	stopper := &fakeRuntimeStopper{err: errors.New("boom: no such run_id")}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeStopper = stopper
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "stop_runtime",
+		Arguments: map[string]any{"run_id": "does-not-exist"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+}
+
+func TestStopRuntime_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "stop_runtime" {
+			t.Fatal("stop_runtime was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestDiscoverRuntimeInstances_Success(t *testing.T) {
+	discoverer := &fakeRuntimeInstanceDiscoverer{result: []runtime.Instance{{Port: 9080, ProjectName: "demo"}}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeDiscoverer = discoverer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "discover_runtime_instances",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+	if !strings.Contains(text.Text, "9080") || !strings.Contains(text.Text, "demo") {
+		t.Errorf("result missing expected instance data: %s", text.Text)
+	}
+	if strings.Contains(text.Text, `"hint"`) {
+		t.Errorf("result should omit hint when instances were found: %s", text.Text)
+	}
+}
+
+func TestDiscoverRuntimeInstances_EmptyResultIncludesHint(t *testing.T) {
+	discoverer := &fakeRuntimeInstanceDiscoverer{result: []runtime.Instance{}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeDiscoverer = discoverer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "discover_runtime_instances",
+		Arguments: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true (empty discovery is not an error), content: %+v", res.Content)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected TextContent, got %T", res.Content[0])
+	}
+	if !strings.Contains(text.Text, "mcp_runtime_autoload.gd") {
+		t.Errorf("empty result missing the expected hint: %s", text.Text)
+	}
+}
+
+func TestDiscoverRuntimeInstances_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "discover_runtime_instances" {
+			t.Fatal("discover_runtime_instances was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestReadRuntimeSceneTree_Success(t *testing.T) {
+	reader := &fakeRuntimeSceneTreeReader{result: &runtime.RuntimeSceneNode{Name: "Main", Type: "Node", Path: "."}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeSceneTree = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_runtime_scene_tree",
+		Arguments: map[string]any{"port": 9080},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.Port != 9080 {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+}
+
+func TestReadRuntimeSceneTree_Error(t *testing.T) {
+	reader := &fakeRuntimeSceneTreeReader{err: errors.New("boom: unreachable")}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeSceneTree = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "read_runtime_scene_tree",
+		Arguments: map[string]any{"port": 9999},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+}
+
+func TestReadRuntimeSceneTree_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "read_runtime_scene_tree" {
+			t.Fatal("read_runtime_scene_tree was advertised under ModeReadWrite")
+		}
+	}
+}
+
+func TestReadRuntimeNodeProperty_Success(t *testing.T) {
+	reader := &fakeRuntimeNodePropertyReader{result: &runtime.RuntimeNodePropertyResult{Value: "100", Type: "int"}}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeNodeProp = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "read_runtime_node_property",
+		Arguments: map[string]any{
+			"port":          9080,
+			"node_path":     "Player",
+			"property_name": "health",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if reader.gotParams.Port != 9080 || reader.gotParams.NodePath != "Player" || reader.gotParams.PropertyName != "health" {
+		t.Fatalf("handler did not pass through params, got %+v", reader.gotParams)
+	}
+}
+
+func TestReadRuntimeNodeProperty_Error(t *testing.T) {
+	reader := &fakeRuntimeNodePropertyReader{err: errors.New("boom: no such property")}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.RuntimeNodeProp = reader
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "read_runtime_node_property",
+		Arguments: map[string]any{
+			"port":          9080,
+			"node_path":     "Player",
+			"property_name": "does_not_exist",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+}
+
+func TestReadRuntimeNodeProperty_NotRegisteredUnderReadWrite(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadWrite))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "read_runtime_node_property" {
+			t.Fatal("read_runtime_node_property was advertised under ModeReadWrite")
 		}
 	}
 }

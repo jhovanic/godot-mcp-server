@@ -32,8 +32,14 @@ AI client (MCP)
 - **Headless CLI tier** — reads/edits scene trees, scripts, and resources by invoking Godot
   headless with a single fixed operations script. Structured JSON in, structured JSON out. No
   temp-script generation, no `eval`.
-- **TCP runtime tier** — an autoload script inside the target project listens on a localhost-only
-  socket for read/interact commands against a *running* game or editor session.
+- **TCP runtime tier** — two independent mechanisms, both `-mode advanced` only:
+  `launch_project`/`read_runtime_output`/`stop_runtime` launches a Godot process this server owns
+  and captures its stdout/stderr directly (OS pipes — no autoload involved, and only ever works for
+  a process this server itself started); `discover_runtime_instances`/`read_runtime_scene_tree`/
+  `read_runtime_node_property` talks to an autoload script inside the target project over a
+  localhost-only socket for live scene tree/property reads, which works against a process started
+  *any* way (including the editor's own Play button) as long as the autoload is installed — see
+  "Enabling the TCP runtime tier" below.
 
 Every tool is an explicit, parameterized operation. There is no generic "run this code" tool, and
 there isn't going to be one — see [SECURITY.md](./SECURITY.md).
@@ -72,9 +78,11 @@ scoped write tools like `set_node_property`, `add_node`/`remove_node`/`reparent_
 (also handles `@onready var`), `set_script_signal`, `set_script_identity` (a script's
 `class_name`/`extends`), and `write_text_resource` (create/overwrite a `.tres` resource from a
 built-in class), or `-mode advanced` to additionally expose `set_function_body` — the one tool
-that lets the AI client author or replace executable GDScript logic — and unlock
-`write_text_resource`'s `script_path` option, which instantiates a project script to construct a
-custom `Resource` subclass; read [SECURITY.md](./SECURITY.md) before enabling it.
+that lets the AI client author or replace executable GDScript logic — `write_text_resource`'s
+`script_path` option, which instantiates a project script to construct a custom `Resource`
+subclass, and the whole TCP runtime tier (`launch_project`/`read_runtime_output`/`stop_runtime`,
+`discover_runtime_instances`/`read_runtime_scene_tree`/`read_runtime_node_property` — see below);
+read [SECURITY.md](./SECURITY.md) before enabling it.
 Full configuration reference is TBD as the tool surface stabilizes.
 
 ```json
@@ -90,6 +98,27 @@ Full configuration reference is TBD as the tool surface stabilizes.
   }
 }
 ```
+
+## Enabling the TCP runtime tier
+
+`launch_project`/`read_runtime_output`/`stop_runtime` work on any project unmodified. The
+live-state tools (`discover_runtime_instances`/`read_runtime_scene_tree`/
+`read_runtime_node_property`) need one extra step: copy this repo's
+[`scripts/mcp_runtime_autoload.gd`](./scripts/mcp_runtime_autoload.gd) into your project and
+register it as an autoload in `project.godot`:
+
+```ini
+[autoload]
+
+McpRuntime="*res://mcp_runtime_autoload.gd"
+```
+
+godot-mcp-server never writes this file or edits `project.godot` for you — this is the one capability
+in this server that requires an explicit, visible change to your own project, not something a tool
+call does on your behalf. The autoload binds the first free port in a fixed range (default
+`9080`-`9089`, matching this server's own `-runtime-port-range` default) on `127.0.0.1` only. If
+you change one side's range, change the other to match — an editor-launched session never receives
+a runtime-negotiated port from this server, so both sides only agree by convention.
 
 ## Security
 

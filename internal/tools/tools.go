@@ -19,6 +19,7 @@ import (
 
 	"github.com/jhovanic/godot-mcp-server/internal/audit"
 	"github.com/jhovanic/godot-mcp-server/internal/headless"
+	"github.com/jhovanic/godot-mcp-server/internal/runtime"
 )
 
 // SceneTreeReader is the narrow interface the read_scene_tree tool depends
@@ -170,6 +171,52 @@ type ScriptIdentitySetter interface {
 	SetScriptIdentity(ctx context.Context, params headless.SetScriptIdentityParams) (*headless.SetScriptIdentityResult, error)
 }
 
+// RuntimeLauncher is the narrow interface the launch_project tool depends
+// on. Registered only under ModeAdvanced, same tier as set_function_body —
+// spawning and controlling an OS process is a materially different risk
+// than every file-only tool above, regardless of what that process does.
+type RuntimeLauncher interface {
+	LaunchProject(ctx context.Context, params runtime.LaunchProjectParams) (*runtime.LaunchProjectResult, error)
+}
+
+// RuntimeOutputReader is the narrow interface the read_runtime_output tool
+// depends on. Same ModeAdvanced tier as RuntimeLauncher — meaningless
+// without a run_id from launch_project, which doesn't exist outside that
+// tier either.
+type RuntimeOutputReader interface {
+	ReadRuntimeOutput(ctx context.Context, params runtime.ReadRuntimeOutputParams) (*runtime.ReadRuntimeOutputResult, error)
+}
+
+// RuntimeStopper is the narrow interface the stop_runtime tool depends on.
+// Same ModeAdvanced tier as RuntimeLauncher/RuntimeOutputReader.
+type RuntimeStopper interface {
+	StopRuntime(ctx context.Context, params runtime.StopRuntimeParams) (*runtime.StopRuntimeResult, error)
+}
+
+// RuntimeInstanceDiscoverer is the narrow interface the
+// discover_runtime_instances tool depends on. Registered under
+// ModeAdvanced: reaching a live game's own socket is new attack surface
+// distinct from every file-only tool in this server, even though every
+// operation this interface (and RuntimeSceneTreeReader/
+// RuntimeNodePropertyReader below) exposes is read-only.
+type RuntimeInstanceDiscoverer interface {
+	DiscoverRuntimeInstances(ctx context.Context, params runtime.DiscoverRuntimeInstancesParams) ([]runtime.Instance, error)
+}
+
+// RuntimeSceneTreeReader is the narrow interface the
+// read_runtime_scene_tree tool depends on. Same ModeAdvanced tier as
+// RuntimeInstanceDiscoverer.
+type RuntimeSceneTreeReader interface {
+	ReadRuntimeSceneTree(ctx context.Context, params runtime.ReadRuntimeSceneTreeParams) (*runtime.RuntimeSceneNode, error)
+}
+
+// RuntimeNodePropertyReader is the narrow interface the
+// read_runtime_node_property tool depends on. Same ModeAdvanced tier as
+// RuntimeInstanceDiscoverer.
+type RuntimeNodePropertyReader interface {
+	ReadRuntimeNodeProperty(ctx context.Context, params runtime.ReadRuntimeNodePropertyToolParams) (*runtime.RuntimeNodePropertyResult, error)
+}
+
 // Deps holds every dependency the tool allowlist needs. Adding a new tool
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
@@ -189,6 +236,12 @@ type Deps struct {
 	ScriptIdentity    ScriptIdentitySetter
 	FunctionBody      FunctionBodySetter
 	WriteTextResource TextResourceWriter
+	RuntimeLauncher   RuntimeLauncher
+	RuntimeOutput     RuntimeOutputReader
+	RuntimeStopper    RuntimeStopper
+	RuntimeDiscoverer RuntimeInstanceDiscoverer
+	RuntimeSceneTree  RuntimeSceneTreeReader
+	RuntimeNodeProp   RuntimeNodePropertyReader
 	Mode              Mode
 	Logger            *audit.Logger
 }
@@ -222,6 +275,12 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 	}
 	if deps.Mode == ModeAdvanced {
 		registerSetFunctionBody(server, deps)
+		registerLaunchProject(server, deps)
+		registerReadRuntimeOutput(server, deps)
+		registerStopRuntime(server, deps)
+		registerDiscoverRuntimeInstances(server, deps)
+		registerReadRuntimeSceneTree(server, deps)
+		registerReadRuntimeNodeProperty(server, deps)
 	}
 }
 
@@ -682,6 +741,204 @@ func registerSetFunctionBody(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		result, err := deps.FunctionBody.SetFunctionBody(ctx, args)
 		deps.Logger.LogResult("headless", "set_function_body", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerLaunchProject(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "launch_project",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Launches a new Godot process for the configured project (headless " +
+			"by default — pass headless: false to launch with a visible window) and begins " +
+			"capturing its stdout/stderr. scene_path optionally launches a specific .tscn " +
+			"instead of the project's own configured main scene. The process keeps running " +
+			"after this call returns; read its output with read_runtime_output and end it with " +
+			"stop_runtime, using the returned run_id. Godot already writes script " +
+			"errors/exceptions to stderr as formatted text even with no debugger attached, so " +
+			"this alone surfaces a real fraction of runtime problems as plain text. Does not " +
+			"expose live scene/property state — see discover_runtime_instances for that " +
+			"(a separate mechanism requiring the target project to have " +
+			"scripts/mcp_runtime_autoload.gd installed as an autoload). Fails if too many " +
+			"instances are already running (stop one first) or scene_path doesn't exist.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.LaunchProjectParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RuntimeLauncher.LaunchProject(ctx, args)
+		deps.Logger.LogResult("runtime", "launch_project", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerReadRuntimeOutput(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_runtime_output",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Reads a launch_project'd process's buffered stdout/stderr since " +
+			"since_cursor (omit or 0 to read from the start), each line tagged with its stream. " +
+			"Returns a cursor to pass as since_cursor on the next call, whether the process has " +
+			"exited (and its exit code if so), and whether since_cursor referred to output " +
+			"already evicted from the buffer (truncated: true) rather than an empty gap. " +
+			"Read-only: never affects the running process. Fails if run_id doesn't match a " +
+			"process this server launched.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.ReadRuntimeOutputParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RuntimeOutput.ReadRuntimeOutput(ctx, args)
+		deps.Logger.LogResult("runtime", "read_runtime_output", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerStopRuntime(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "stop_runtime",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Terminates a launch_project'd process with a hard kill (not a " +
+			"graceful in-game shutdown) — its buffered output stays readable via " +
+			"read_runtime_output afterward. Reports already_exited: true, not an error, if the " +
+			"process had already stopped on its own. Fails if run_id doesn't match a process " +
+			"this server launched.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.StopRuntimeParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RuntimeStopper.StopRuntime(ctx, args)
+		deps.Logger.LogResult("runtime", "stop_runtime", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+// discoverRuntimeInstancesResult wraps runtime.DiscoverInstances' own
+// result with an optional hint — discovering zero instances is a normal,
+// successful outcome (there may genuinely be nothing running), but if the
+// caller expected to find something, a bare empty list gives no clue why.
+type discoverRuntimeInstancesResult struct {
+	Instances []runtime.Instance `json:"instances"`
+	Hint      string             `json:"hint,omitempty"`
+}
+
+func registerDiscoverRuntimeInstances(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "discover_runtime_instances",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Scans a fixed, documented local port range for live " +
+			"scripts/mcp_runtime_autoload.gd listeners and returns every one that answers, each " +
+			"with its port and project_name — not just the first, since more than one live " +
+			"instance can legitimately exist at once (local multiplayer testing). Works " +
+			"against a process launched any way (this server's own launch_project, or the " +
+			"editor's own Play button) as long as the target project has the autoload " +
+			"installed — unlike launch_project/read_runtime_output, this doesn't require this " +
+			"server to have started the process. An empty result is a normal, successful " +
+			"outcome, not an error. Use the returned port with read_runtime_scene_tree/" +
+			"read_runtime_node_property.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.DiscoverRuntimeInstancesParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		instances, err := deps.RuntimeDiscoverer.DiscoverRuntimeInstances(ctx, args)
+		deps.Logger.LogResult("runtime", "discover_runtime_instances", args, instances, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		result := discoverRuntimeInstancesResult{Instances: instances}
+		if len(instances) == 0 {
+			result.Hint = "No live instances found. If a game is running and this is unexpected, confirm scripts/mcp_runtime_autoload.gd is registered as an autoload in the target project's project.godot."
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerReadRuntimeSceneTree(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_runtime_scene_tree",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Read-only. Returns the *live* scene tree (name, type, path, " +
+			"children) of the instance listening on port, from discover_runtime_instances — " +
+			"reflecting current runtime state (nodes added/removed/reparented at runtime), not " +
+			"the saved .tscn. path addresses each node relative to the current scene root, " +
+			"using Godot's own NodePath syntax, for chaining into " +
+			"read_runtime_node_property. Does not modify the running game's state.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.ReadRuntimeSceneTreeParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RuntimeSceneTree.ReadRuntimeSceneTree(ctx, args)
+		deps.Logger.LogResult("runtime", "read_runtime_scene_tree", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+func registerReadRuntimeNodeProperty(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "read_runtime_node_property",
+		Description: "ADVANCED / HIGH RISK. Only available when the server was started with " +
+			"-mode advanced. Read-only. Reads one live property value (current position after " +
+			"physics has moved it, current health after damage, etc.) off a node addressed by " +
+			"node_path, relative to the current scene root of the instance listening on port, " +
+			"from discover_runtime_instances. Returns the value as a string representation " +
+			"(not a fully typed value) plus its runtime type name. Does not modify the running " +
+			"game's state. Fails if no node exists at node_path or it has no such property.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runtime.ReadRuntimeNodePropertyToolParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		result, err := deps.RuntimeNodeProp.ReadRuntimeNodeProperty(ctx, args)
+		deps.Logger.LogResult("runtime", "read_runtime_node_property", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}
