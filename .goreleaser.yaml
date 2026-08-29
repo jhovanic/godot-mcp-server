@@ -30,13 +30,19 @@ archives:
         formats: [zip]
     # Ship the fixed headless-tier operations script alongside the binary:
     # cmd/godot-mcp-server's default -operations-script path resolves it as
-    # scripts/godot_operations.gd next to the executable.
+    # scripts/godot_operations.gd next to the executable. Also ship the TCP
+    # runtime tier's autoload template (scripts/mcp_runtime_autoload.gd) —
+    # not loaded by this binary itself, but the operator needs the file
+    # available to copy into their own project; see README.md's "Enabling
+    # the TCP runtime tier".
     files:
       - LICENSE
       - README.md
       - SECURITY.md
       - src: scripts/godot_operations.gd
         dst: scripts/godot_operations.gd
+      - src: scripts/mcp_runtime_autoload.gd
+        dst: scripts/mcp_runtime_autoload.gd
 
 checksum:
   name_template: "checksums.txt"
