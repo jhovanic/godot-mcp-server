@@ -3577,3 +3577,269 @@ func TestReparentNode_RealGodot_PreservesSceneUID(t *testing.T) {
 		t.Errorf("saved scene missing Sprite reparented under Container: %s", data)
 	}
 }
+
+// writeTextResourceFixtureClient builds a fresh, temp-dir-backed project
+// with a custom Resource-subclass script (character_stats.gd) for the
+// script_path test cases — write_text_resource's whole point is
+// constructing new files, so every test here gets its own project rather
+// than sharing state.
+func writeTextResourceFixtureClient(t *testing.T) *Client {
+	t.Helper()
+	godotBin := godotBinForTest(t)
+
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "project.godot"), []byte("config_version=5\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	const statsScript = `extends Resource
+class_name CharacterStats
+
+@export var max_health: int = 100
+@export var display_name: String = "Unnamed"
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "character_stats.gd"), []byte(statsScript), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	root, err := validate.NewRoot(projectDir)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	return &Client{GodotBin: godotBin, OperationsScript: operationsScriptPath(t), Root: root}
+}
+
+func TestWriteTextResource_RealGodot_BuiltInClassWithProperty(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	className := "StyleBoxFlat"
+	bg := Color{R: 1, G: 0, B: 0, A: 1}
+	result, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "box.tres",
+		ClassName:    &className,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "bg_color", PropertyValueFields: PropertyValueFields{ColorValue: &bg}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteTextResource against a real Godot binary: %v", err)
+	}
+	if result.Type != "StyleBoxFlat" {
+		t.Errorf("Type = %q, want %q", result.Type, "StyleBoxFlat")
+	}
+	if result.Action != "created" {
+		t.Errorf("Action = %q, want %q", result.Action, "created")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "box.tres"))
+	if err != nil {
+		t.Fatalf("reading saved resource: %v", err)
+	}
+	if !strings.Contains(string(data), `type="StyleBoxFlat"`) {
+		t.Errorf("saved resource missing expected type: %s", data)
+	}
+	if !strings.Contains(string(data), "bg_color = Color(1, 0, 0, 1)") {
+		t.Errorf("saved resource missing expected bg_color property: %s", data)
+	}
+}
+
+func TestWriteTextResource_RealGodot_CustomScriptClassWithPropertyOverride(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	scriptPath := "character_stats.gd"
+	maxHealth := int64(250)
+	result, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "goblin.tres",
+		ScriptPath:   &scriptPath,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "max_health", PropertyValueFields: PropertyValueFields{IntValue: &maxHealth}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteTextResource against a real Godot binary: %v", err)
+	}
+	if result.Type != "CharacterStats" {
+		t.Errorf("Type = %q, want %q (the script's own declared class_name)", result.Type, "CharacterStats")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "goblin.tres"))
+	if err != nil {
+		t.Fatalf("reading saved resource: %v", err)
+	}
+	if !strings.Contains(string(data), `ExtResource("1_`) && !strings.Contains(string(data), "script = ExtResource(") {
+		t.Errorf("saved resource missing script reference: %s", data)
+	}
+	if !strings.Contains(string(data), "max_health = 250") {
+		t.Errorf("saved resource missing the overridden max_health value: %s", data)
+	}
+	if strings.Contains(string(data), "display_name") {
+		t.Errorf("saved resource should omit display_name (left at its script default): %s", data)
+	}
+}
+
+func TestWriteTextResource_RealGodot_OverwriteFalseFailsThenTrueSucceeds(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	className := "Resource"
+	if _, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "blank.tres",
+		ClassName:    &className,
+	}); err != nil {
+		t.Fatalf("initial WriteTextResource against a real Godot binary: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(c.Root.String(), "blank.tres"))
+	if err != nil {
+		t.Fatalf("reading resource after initial creation: %v", err)
+	}
+
+	strVal := "test-resource"
+	_, err = c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "blank.tres",
+		ClassName:    &className,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "resource_name", PropertyValueFields: PropertyValueFields{StringValue: &strVal}},
+		},
+	})
+	if err == nil {
+		t.Fatal("WriteTextResource against an existing file without overwrite, want error")
+	}
+	after, err := os.ReadFile(filepath.Join(c.Root.String(), "blank.tres"))
+	if err != nil {
+		t.Fatalf("reading resource after the rejected attempt: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("resource was modified despite the rejection:\nbefore: %s\nafter: %s", before, after)
+	}
+
+	result, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "blank.tres",
+		ClassName:    &className,
+		Overwrite:    true,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "resource_name", PropertyValueFields: PropertyValueFields{StringValue: &strVal}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteTextResource with overwrite against a real Godot binary: %v", err)
+	}
+	if result.Action != "overwritten" {
+		t.Errorf("Action = %q, want %q", result.Action, "overwritten")
+	}
+
+	data, err := os.ReadFile(filepath.Join(c.Root.String(), "blank.tres"))
+	if err != nil {
+		t.Fatalf("reading overwritten resource: %v", err)
+	}
+	if !strings.Contains(string(data), `resource_name = "test-resource"`) {
+		t.Errorf("overwritten resource missing the new resource_name: %s", data)
+	}
+}
+
+// TestWriteTextResource_RealGodot_RejectsScriptPropertyEvenViaResourceValue
+// is the specific vulnerability this design is built to prevent: without
+// the property_name == "script" block, resource_value's own loader would
+// happily load the .gd file (Script is itself a Resource) and this would
+// silently attach it to the constructed resource, bypassing the
+// script_path/-mode advanced gate entirely.
+func TestWriteTextResource_RealGodot_RejectsScriptPropertyEvenViaResourceValue(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	className := "Resource"
+	scriptRef := "character_stats.gd"
+	_, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "sneaky.tres",
+		ClassName:    &className,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "script", PropertyValueFields: PropertyValueFields{ResourceValue: &scriptRef}},
+		},
+	})
+	if err == nil {
+		t.Fatal("WriteTextResource setting property_name \"script\" via resource_value, want error")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(c.Root.String(), "sneaky.tres")); statErr == nil {
+		t.Error("sneaky.tres was created despite the rejection")
+	}
+}
+
+func TestWriteTextResource_RealGodot_AcceptsCompatibleResourceValueClass(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	const placeholderTexture = `[gd_resource type="PlaceholderTexture2D" format=3]
+
+[resource]
+size = Vector2(16, 16)
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "placeholder.tres"), []byte(placeholderTexture), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Proves the shared _apply_property_value class-compatibility check
+	// still runs correctly against a Resource target, not just a Node
+	// target: a Texture2D-compatible reference for a Texture2D-typed
+	// property succeeds.
+	className := "StyleBoxTexture"
+	texRef := "placeholder.tres"
+	result, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "styled.tres",
+		ClassName:    &className,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "texture", PropertyValueFields: PropertyValueFields{ResourceValue: &texRef}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteTextResource with a compatible texture reference against a real Godot binary: %v", err)
+	}
+	if result.Type != "StyleBoxTexture" {
+		t.Errorf("Type = %q, want %q", result.Type, "StyleBoxTexture")
+	}
+}
+
+func TestWriteTextResource_RealGodot_RejectsIncompatibleResourceValueClass(t *testing.T) {
+	c := writeTextResourceFixtureClient(t)
+
+	const incompatible = `[gd_resource type="Resource" format=3]
+
+[resource]
+`
+	if err := os.WriteFile(filepath.Join(c.Root.String(), "not_a_texture.tres"), []byte(incompatible), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// A bare Resource is not compatible with StyleBoxTexture.texture, which
+	// expects a Texture2D — same rejection set_node_property's own
+	// resource_value class-compatibility check already exercises, proven
+	// here to still work when the target is a Resource, not a Node.
+	className := "StyleBoxTexture"
+	texRef := "not_a_texture.tres"
+	_, err := c.WriteTextResource(ctx, WriteTextResourceParams{
+		ResourcePath: "styled.tres",
+		ClassName:    &className,
+		Properties: []WriteTextResourcePropertyValue{
+			{PropertyName: "texture", PropertyValueFields: PropertyValueFields{ResourceValue: &texRef}},
+		},
+	})
+	if err == nil {
+		t.Fatal("WriteTextResource with an incompatible resource_value class against a real Godot binary, want error")
+	}
+	if _, statErr := os.Stat(filepath.Join(c.Root.String(), "styled.tres")); statErr == nil {
+		t.Error("styled.tres was created despite the rejection")
+	}
+}

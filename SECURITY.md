@@ -34,12 +34,13 @@ These are permanent constraints, not v1 limitations:
   merely rejected if called. Widening to `-mode read-write` is an explicit, per-run opt-in the
   operator makes at startup; it is never implicit and there is no way to enable it from inside an
   MCP session. A third value, `-mode advanced`, is a strict superset of `-mode read-write` that
-  additionally unlocks tools carrying a materially different kind of risk — currently just
-  `set_function_body`, the one tool that lets an AI client author or replace executable GDScript
-  logic (see the "advanced tool" shape below) — gated the same way: an explicit, per-run opt-in,
-  never implicit, and impossible to reach from inside a running session. Starting with
-  `-mode advanced` also prints a loud, explicit warning to stderr naming the risk, on top of the
-  normal startup log line.
+  additionally unlocks tools (or, in one case, a single parameter) carrying a materially different
+  kind of risk — `set_function_body`, the one tool that lets an AI client author or replace
+  executable GDScript logic, and `write_text_resource`'s `script_path` option, which instantiates a
+  project script (running it) to construct a custom `Resource` subclass (see the "advanced tool"
+  shape below) — gated the same way: an explicit, per-run opt-in, never implicit, and impossible to
+  reach from inside a running session. Starting with `-mode advanced` also prints a loud, explicit
+  warning to stderr naming the risk, on top of the normal startup log line.
 - **Every tool invocation is logged** — the operation, its parameters, and its result — so there's
   an audit trail independent of the AI client's own logs. Every entry always goes to stderr, and
   by default is *also* written to `logs/<session>.txt` next to the running binary, so a human has
@@ -53,7 +54,7 @@ These are permanent constraints, not v1 limitations:
 
 | Actor | Assumed trust | What they can affect |
 |---|---|---|
-| The AI client (e.g. Claude Code) | Untrusted — may be manipulated by content it reads (files, web pages, etc.) | Only the operations explicitly exposed as tools, scoped to the project root. Under `-mode advanced` specifically, this includes `set_function_body`, which can introduce or alter executable behavior, not just data — an operator-made trust decision, not a default |
+| The AI client (e.g. Claude Code) | Untrusted — may be manipulated by content it reads (files, web pages, etc.) | Only the operations explicitly exposed as tools, scoped to the project root. Under `-mode advanced` specifically, this includes `set_function_body` (introduces or alters executable behavior) and `write_text_resource`'s `script_path` option (instantiates and runs an existing project script) — an operator-made trust decision, not a default |
 | A process on the local machine | Trusted (same-user assumption) | Can reach the TCP tier on localhost — this is a same-machine trust boundary, not a network one |
 | A remote attacker | Untrusted, no direct access | No path to this server unless the operator deliberately exposes the TCP tier beyond loopback (unsupported) |
 

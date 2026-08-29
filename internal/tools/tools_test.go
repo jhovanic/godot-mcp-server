@@ -170,6 +170,20 @@ func (f *fakeScriptIdentitySetter) SetScriptIdentity(_ context.Context, params h
 	return f.result, f.err
 }
 
+// fakeTextResourceWriter is a test double for tools.TextResourceWriter.
+type fakeTextResourceWriter struct {
+	gotParams headless.WriteTextResourceParams
+	called    bool
+	result    *headless.WriteTextResourceResult
+	err       error
+}
+
+func (f *fakeTextResourceWriter) WriteTextResource(_ context.Context, params headless.WriteTextResourceParams) (*headless.WriteTextResourceResult, error) {
+	f.gotParams = params
+	f.called = true
+	return f.result, f.err
+}
+
 // fakeFunctionBodySetter is a test double for tools.FunctionBodySetter.
 type fakeFunctionBodySetter struct {
 	gotParams headless.SetFunctionBodyParams
@@ -759,22 +773,23 @@ var readToolNames = map[string]bool{
 
 func fullDeps(logger *audit.Logger, mode tools.Mode) tools.Deps {
 	return tools.Deps{
-		SceneTree:       &fakeReader{},
-		Script:          &fakeScriptReader{},
-		ProjectSettings: &fakeProjectSettingsReader{},
-		TextResource:    &fakeTextResourceReader{},
-		BinaryResource:  &fakeBinaryResourceReader{},
-		ImportSettings:  &fakeImportSettingsReader{},
-		NodeProperty:    &fakeNodePropertySetter{},
-		AddNode:         &fakeNodeAdder{},
-		RemoveNode:      &fakeNodeRemover{},
-		ReparentNode:    &fakeNodeReparenter{},
-		ScriptExport:    &fakeScriptExportSetter{},
-		ScriptSignal:    &fakeScriptSignalSetter{},
-		ScriptIdentity:  &fakeScriptIdentitySetter{},
-		FunctionBody:    &fakeFunctionBodySetter{},
-		Mode:            mode,
-		Logger:          logger,
+		SceneTree:         &fakeReader{},
+		Script:            &fakeScriptReader{},
+		ProjectSettings:   &fakeProjectSettingsReader{},
+		TextResource:      &fakeTextResourceReader{},
+		BinaryResource:    &fakeBinaryResourceReader{},
+		ImportSettings:    &fakeImportSettingsReader{},
+		NodeProperty:      &fakeNodePropertySetter{},
+		AddNode:           &fakeNodeAdder{},
+		RemoveNode:        &fakeNodeRemover{},
+		ReparentNode:      &fakeNodeReparenter{},
+		ScriptExport:      &fakeScriptExportSetter{},
+		ScriptSignal:      &fakeScriptSignalSetter{},
+		ScriptIdentity:    &fakeScriptIdentitySetter{},
+		FunctionBody:      &fakeFunctionBodySetter{},
+		WriteTextResource: &fakeTextResourceWriter{},
+		Mode:              mode,
+		Logger:            logger,
 	}
 }
 
@@ -789,6 +804,7 @@ var readWriteToolNames = map[string]bool{
 	"set_script_export":   true,
 	"set_script_signal":   true,
 	"set_script_identity": true,
+	"write_text_resource": true,
 }
 
 // TestRegisterAll_ModeGatesWriteTools asserts the write tool set advertised
@@ -2764,6 +2780,205 @@ func TestSetScriptIdentity_NotRegisteredUnderReadOnly(t *testing.T) {
 		if tl.Name == "set_script_identity" {
 			t.Fatal("set_script_identity was advertised under ModeReadOnly")
 		}
+	}
+}
+
+func TestWriteTextResource_Success(t *testing.T) {
+	writer := &fakeTextResourceWriter{
+		result: &headless.WriteTextResourceResult{
+			Path:   "res://stats.tres",
+			Type:   "Theme",
+			Action: "created",
+		},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.WriteTextResource = writer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "write_text_resource",
+		Arguments: map[string]any{
+			"resource_path": "stats.tres",
+			"class_name":    "Theme",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true, content: %+v", res.Content)
+	}
+	if !writer.called {
+		t.Fatal("handler did not call the underlying WriteTextResource")
+	}
+	if writer.gotParams.ResourcePath != "stats.tres" {
+		t.Fatalf("handler did not pass through params, got %+v", writer.gotParams)
+	}
+	if writer.gotParams.ClassName == nil || *writer.gotParams.ClassName != "Theme" {
+		t.Fatalf("handler did not pass through class_name, got %+v", writer.gotParams.ClassName)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Operation != "write_text_resource" {
+		t.Errorf("audit entry operation = %q, want %q", entry.Operation, "write_text_resource")
+	}
+	if entry.Outcome != audit.OutcomeOK {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeOK)
+	}
+}
+
+func TestWriteTextResource_Error(t *testing.T) {
+	wantErr := errors.New("boom: no such class")
+	writer := &fakeTextResourceWriter{err: wantErr}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.WriteTextResource = writer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "write_text_resource",
+		Arguments: map[string]any{
+			"resource_path": "stats.tres",
+			"class_name":    "Theme",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for a failed operation, got false: %+v", res.Content)
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+// TestWriteTextResource_NotRegisteredUnderReadOnly confirms
+// write_text_resource is a write tool: never advertised to the MCP client
+// under ModeReadOnly.
+func TestWriteTextResource_NotRegisteredUnderReadOnly(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, fullDeps(logger, tools.ModeReadOnly))
+
+	cs := connect(t, server)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tl := range list.Tools {
+		if tl.Name == "write_text_resource" {
+			t.Fatal("write_text_resource was advertised under ModeReadOnly")
+		}
+	}
+}
+
+// TestWriteTextResource_RejectsScriptPathUnderReadWrite and
+// TestWriteTextResource_AllowsScriptPathUnderAdvanced are specific to this
+// tool's novel per-parameter mode gating (see registerWriteTextResource's
+// doc comment): script_path is refused before ever reaching the underlying
+// TextResourceWriter under ModeReadWrite, and allowed through under
+// ModeAdvanced.
+func TestWriteTextResource_RejectsScriptPathUnderReadWrite(t *testing.T) {
+	writer := &fakeTextResourceWriter{
+		result: &headless.WriteTextResourceResult{Path: "res://stats.tres", Type: "CharacterStats", Action: "created"},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeReadWrite)
+	deps.WriteTextResource = writer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "write_text_resource",
+		Arguments: map[string]any{
+			"resource_path": "stats.tres",
+			"script_path":   "character_stats.gd",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("want IsError=true for script_path under ModeReadWrite, got false: %+v", res.Content)
+	}
+	if writer.called {
+		t.Fatal("underlying WriteTextResource was called despite script_path being refused under ModeReadWrite")
+	}
+
+	logLine := strings.TrimSpace(logBuf.String())
+	var entry audit.Entry
+	if err := json.Unmarshal([]byte(logLine), &entry); err != nil {
+		t.Fatalf("audit log entry is not valid JSON: %v (%s)", err, logLine)
+	}
+	if entry.Outcome != audit.OutcomeError {
+		t.Errorf("audit entry outcome = %q, want %q", entry.Outcome, audit.OutcomeError)
+	}
+}
+
+func TestWriteTextResource_AllowsScriptPathUnderAdvanced(t *testing.T) {
+	writer := &fakeTextResourceWriter{
+		result: &headless.WriteTextResourceResult{Path: "res://stats.tres", Type: "CharacterStats", Action: "created"},
+	}
+	var logBuf bytes.Buffer
+	logger := audit.New(&logBuf)
+
+	deps := fullDeps(logger, tools.ModeAdvanced)
+	deps.WriteTextResource = writer
+	server := mcp.NewServer(&mcp.Implementation{Name: "godot-mcp-server-test", Version: "v0.0.1"}, nil)
+	tools.RegisterAll(server, deps)
+
+	cs := connect(t, server)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "write_text_resource",
+		Arguments: map[string]any{
+			"resource_path": "stats.tres",
+			"script_path":   "character_stats.gd",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool returned IsError=true for script_path under ModeAdvanced, content: %+v", res.Content)
+	}
+	if !writer.called {
+		t.Fatal("underlying WriteTextResource was not called even though script_path should be allowed under ModeAdvanced")
+	}
+	if writer.gotParams.ScriptPath == nil || *writer.gotParams.ScriptPath != "character_stats.gd" {
+		t.Fatalf("handler did not pass through script_path, got %+v", writer.gotParams.ScriptPath)
 	}
 }
 

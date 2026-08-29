@@ -12,6 +12,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -65,6 +66,18 @@ type ImportSettingsReader interface {
 	ReadImportSettings(ctx context.Context, params headless.ReadImportSettingsParams) (*headless.ImportSettings, error)
 }
 
+// TextResourceWriter is the narrow interface the write_text_resource tool
+// depends on. Unlike every other write interface below, this one tool has
+// per-parameter mode gating rather than a single whole-tool tier: a
+// built-in ClassName is a structural, non-executable construction (same
+// risk class as set_node_property, registered under ModeReadWrite), but a
+// ScriptPath instantiates a project script — running it — which
+// registerWriteTextResource gates to ModeAdvanced specifically, before ever
+// calling this interface. See registerWriteTextResource's doc comment.
+type TextResourceWriter interface {
+	WriteTextResource(ctx context.Context, params headless.WriteTextResourceParams) (*headless.WriteTextResourceResult, error)
+}
+
 // Mode selects which tools RegisterAll exposes. ModeReadOnly (including the
 // zero value, so an unset Mode fails safe rather than fails open) is the
 // default: nothing but the fixed read tools is ever registered unless a
@@ -82,13 +95,14 @@ const (
 	ModeReadWrite Mode = "read-write"
 	// ModeAdvanced is a strict superset of ModeReadWrite: it registers
 	// every read tool, every ModeReadWrite tool, and additionally the
-	// tools in SECURITY.md's "explicit, off-by-default, advanced tool"
-	// category — currently just set_function_body, the one tool that lets
-	// an AI client author or replace executable GDScript logic. There is
-	// no way to reach ModeAdvanced except an explicit -mode advanced flag
-	// at startup (see main.go's parseFlags); it is never implied by, or
-	// reachable from within, a running session — the same guarantee
-	// ModeReadWrite already has.
+	// tools (or, for write_text_resource, the one parameter branch) in
+	// SECURITY.md's "explicit, off-by-default, advanced tool" category —
+	// set_function_body (authors/replaces executable GDScript logic) and
+	// write_text_resource's script_path option (instantiates a project
+	// script, running it). There is no way to reach ModeAdvanced except an
+	// explicit -mode advanced flag at startup (see main.go's parseFlags);
+	// it is never implied by, or reachable from within, a running session —
+	// the same guarantee ModeReadWrite already has.
 	ModeAdvanced Mode = "advanced"
 )
 
@@ -160,22 +174,23 @@ type ScriptIdentitySetter interface {
 // tier's dependency here (and threading it through from cmd/) keeps
 // construction explicit and centralized, matching the allowlist itself.
 type Deps struct {
-	SceneTree       SceneTreeReader
-	Script          ScriptReader
-	ProjectSettings ProjectSettingsReader
-	TextResource    TextResourceReader
-	BinaryResource  BinaryResourceReader
-	ImportSettings  ImportSettingsReader
-	NodeProperty    NodePropertySetter
-	AddNode         NodeAdder
-	RemoveNode      NodeRemover
-	ReparentNode    NodeReparenter
-	ScriptExport    ScriptExportSetter
-	ScriptSignal    ScriptSignalSetter
-	ScriptIdentity  ScriptIdentitySetter
-	FunctionBody    FunctionBodySetter
-	Mode            Mode
-	Logger          *audit.Logger
+	SceneTree         SceneTreeReader
+	Script            ScriptReader
+	ProjectSettings   ProjectSettingsReader
+	TextResource      TextResourceReader
+	BinaryResource    BinaryResourceReader
+	ImportSettings    ImportSettingsReader
+	NodeProperty      NodePropertySetter
+	AddNode           NodeAdder
+	RemoveNode        NodeRemover
+	ReparentNode      NodeReparenter
+	ScriptExport      ScriptExportSetter
+	ScriptSignal      ScriptSignalSetter
+	ScriptIdentity    ScriptIdentitySetter
+	FunctionBody      FunctionBodySetter
+	WriteTextResource TextResourceWriter
+	Mode              Mode
+	Logger            *audit.Logger
 }
 
 // RegisterAll registers every tool this server exposes against server. This
@@ -203,6 +218,7 @@ func RegisterAll(server *mcp.Server, deps Deps) {
 		registerSetScriptExport(server, deps)
 		registerSetScriptSignal(server, deps)
 		registerSetScriptIdentity(server, deps)
+		registerWriteTextResource(server, deps)
 	}
 	if deps.Mode == ModeAdvanced {
 		registerSetFunctionBody(server, deps)
@@ -574,6 +590,62 @@ func registerSetScriptIdentity(server *mcp.Server, deps Deps) {
 		start := time.Now()
 		result, err := deps.ScriptIdentity.SetScriptIdentity(ctx, args)
 		deps.Logger.LogResult("headless", "set_script_identity", args, result, err, start)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		}, result, nil
+	})
+}
+
+// registerWriteTextResource is the one tool in this server whose mode
+// gating varies by which parameter branch a call actually uses, rather
+// than being a single whole-tool tier. It's registered here (in the
+// ModeReadWrite || ModeAdvanced block, alongside every other structural
+// write tool) so class_name construction is available under
+// -mode read-write like the rest of them — but a call naming script_path
+// is rejected outright, before ever reaching internal/headless/Godot,
+// unless the server is running under -mode advanced. internal/headless has
+// no concept of -mode at all (by design — see its package doc comment), so
+// this check has to live here, the one place that already knows deps.Mode.
+func registerWriteTextResource(server *mcp.Server, deps Deps) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "write_text_resource",
+		Description: "Write. Creates or overwrites a .tres resource file under the configured " +
+			"project root by constructing a Resource and setting zero or more properties on " +
+			"it, then saving. Exactly one of class_name/script_path must be given: class_name " +
+			"constructs a built-in Godot engine Resource subclass (e.g. \"Theme\", " +
+			"\"ShaderMaterial\") and is available under -mode read-write; script_path " +
+			"instances a project .gd script defining a custom Resource subclass (the only way " +
+			"to construct one, since its property shape is defined by that script, not the " +
+			"engine) and is only available under -mode advanced, since instantiating a " +
+			"project script runs it. properties is optional — omit or leave empty to use " +
+			"every default value — and reuses set_node_property's own value-type shapes, so a " +
+			"resource can reference other project resources (resource_value). property_name " +
+			"\"script\" is always refused. overwrite (default false) must be set to replace an " +
+			"existing file; resource_path's parent directory must already exist. Fails, " +
+			"without writing anything, if the parent directory is missing, the file already " +
+			"exists and overwrite is false, class_name/script_path doesn't resolve to a " +
+			"Resource subclass, or any property doesn't exist or is incompatible with its " +
+			"value. Only ever available when the server was started with -mode read-write " +
+			"(class_name only) or -mode advanced (both).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args headless.WriteTextResourceParams) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		if args.ScriptPath != nil && deps.Mode != ModeAdvanced {
+			err := errors.New("write_text_resource: script_path requires -mode advanced (instantiating a project script runs it) — only class_name is available under -mode read-write")
+			deps.Logger.LogResult("headless", "write_text_resource", args, nil, err, start)
+			return nil, nil, err
+		}
+
+		result, err := deps.WriteTextResource.WriteTextResource(ctx, args)
+		deps.Logger.LogResult("headless", "write_text_resource", args, result, err, start)
 		if err != nil {
 			return nil, nil, err
 		}

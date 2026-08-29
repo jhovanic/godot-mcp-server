@@ -182,9 +182,13 @@ changelog.
           loaded via `load()` on that derived path. `_op_set_node_property` must never call
           `load()` on anything the caller supplies directly — Godot's `load()` also accepts
           absolute OS paths and `user://`, which would sidestep `Root.Resolve` entirely.
-        - Reference-only, not construct-in-place: the tool points a property at an existing
-          resource file; it never builds a new Resource from inline parameters (a materially
-          bigger surface — general object construction — that nothing else in this design does).
+        - Reference-only, not construct-in-place: `set_node_property` itself only ever points a
+          property at an existing resource file; it never builds a new Resource from inline
+          parameters. This boundary is deliberately, explicitly revised — not silently crossed —
+          by the dedicated `write_text_resource` tool below, which exists specifically to
+          construct a new Resource from parameters and save it as a `.tres` file; every other
+          write tool in this project still only ever references or mutates something that already
+          exists.
         - Embedded sub-resources (a `.tscn`'s own `[sub_resource]` blocks, addressed by an in-file
           ID rather than a filesystem path) are explicitly out of scope. There's no tool that
           surfaces a scene's sub-resource table to the AI in the first place — `read_scene_tree`
@@ -331,6 +335,45 @@ changelog.
       `true`, matching the editor's own drag-and-drop default. Same cross-reference disclaimer as
       `remove_node`: does not check or fix up other nodes' NodePath-typed properties or signal
       connections that may reference the moved node by its old path.
+- [x] `write_text_resource` — creates or overwrites a `.tres` resource file by constructing a
+      `Resource` (a built-in `ClassDB` class, or a project script defining a custom `Resource`
+      subclass) and setting zero or more properties on it, then `ResourceSaver.save()`s it. The
+      write-side counterpart to `read_text_resource`/`read_binary_resource`, and the first tool to
+      construct a new Resource from inline parameters rather than only referencing one — see the
+      `resource_value` note above for the boundary this deliberately revises, and why.
+      **First tool with per-parameter mode gating, not a single whole-tool tier**: `class_name`
+      (a built-in engine class, e.g. `Theme`) is a structural, non-executable construction,
+      registered under `-mode read-write` like every other scene/resource write tool. `script_path`
+      (a project `.gd` script defining a custom Resource subclass — the only way to construct one,
+      since its whole property shape is defined by that script, not the engine) instantiates and
+      runs that script, so it's refused outright under `-mode read-write` and only allowed under
+      `-mode advanced`, the same risk tier as `set_function_body` — checked in
+      `internal/tools.registerWriteTextResource`'s handler closure, since `internal/headless` has
+      no concept of `-mode` by design.
+    - `properties` reuses `set_node_property`'s own value-type shapes (so a resource can reference
+      other project resources via `resource_value`) via two shared, target-agnostic GDScript
+      helpers (`_parse_property_value`/`_apply_property_value`, extracted from
+      `_op_set_node_property` without changing its behavior — verified by its full existing test
+      suite passing unchanged) and a duplicated (not embedded) Go struct
+      (`headless.PropertyValueFields`): Go struct embedding would have broken every existing keyed
+      `SetNodePropertyParams{...}` literal across the test suite (composite-literal syntax can't
+      name a promoted field from an embedded struct), a much bigger diff than the modest
+      field-declaration duplication accepted instead.
+    - `property_name == "script"` is refused unconditionally for every `properties` entry, same as
+      `set_node_property` and for the same reason — a `resource_value` pointing at an arbitrary
+      `.gd` file would otherwise let a caller attach any script to the constructed resource,
+      bypassing the `script_path`/`-mode advanced` gate entirely.
+    - `properties` is optional (empty/omitted means every property keeps its class default) even
+      though the original request called it required — a strictly more permissive generalization,
+      since there's no separate "edit" tool (re-calling with `overwrite: true` is how editing an
+      existing resource works).
+    - No `PackedScene`/`SceneTree` machinery at all, unlike every other write tool above — a
+      `Resource` isn't part of a scene tree, so there's nothing to `pack()` or `free()`.
+    - The result's `type` field prefers the script's own declared `class_name`
+      (`Script.get_global_name()`, confirmed empirically against a real Godot 4.7.2 binary) over
+      `get_class()` for the `script_path` case, since Godot's `get_class()` always reports the
+      native base class, never a script's own class name — without this, every custom-resource
+      result would uselessly say `"Resource"`.
 
 ### TCP runtime tier
 - [ ] Autoload listener script (localhost-only) for live editor/game state
