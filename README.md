@@ -4,6 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/jhovanic/godot-mcp-server)](https://github.com/jhovanic/godot-mcp-server/releases)
 [![Go version](https://img.shields.io/github/go-mod/go-version/jhovanic/godot-mcp-server)](go.mod)
 [![License: MIT](https://img.shields.io/github/license/jhovanic/godot-mcp-server)](LICENSE)
+
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/jhovanic)
 
 A self-hosted [Model Context Protocol](https://modelcontextprotocol.io) server for Godot, written in Go.
